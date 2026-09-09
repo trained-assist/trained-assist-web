@@ -12,8 +12,12 @@
       <h1>Claude Assistant</h1>
       <form id="form">
         <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus required>
+        </div>
+        <div class="field">
           <label for="password">Access Password</label>
-          <input type="password" id="password" autocomplete="current-password" autofocus required>
+          <input type="password" id="password" autocomplete="current-password" required>
         </div>
         <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Sign in</button>
         <div id="err" class="err hidden"></div>
@@ -21,8 +25,6 @@
     </div>
   </div>
   <script>
-    if (localStorage.getItem('wa_token')) location.href = 'index.html';
-
     document.getElementById('form').addEventListener('submit', async e => {
       e.preventDefault();
       const btn = e.target.querySelector('button[type=submit]');
@@ -36,17 +38,20 @@
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: document.getElementById('password').value })
+          body: JSON.stringify({
+            username: document.getElementById('username').value.trim(),
+            password: document.getElementById('password').value
+          })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          err.textContent = data.error || 'Invalid password';
+          err.textContent = data.error || 'Invalid username or password';
           err.classList.remove('hidden');
           btn.disabled = false;
           btn.textContent = 'Sign in';
           return;
         }
-        if (data.token) localStorage.setItem('wa_token', data.token);
+        // Auth is a httpOnly cookie set by the server — nothing to store client-side.
         location.href = 'index.html';
       } catch {
         err.textContent = 'Connection error. Try again.';
