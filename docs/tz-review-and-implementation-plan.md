@@ -11,118 +11,145 @@
 
 ---
 
-## Дыры и незакрытые вопросы
+## Решения по спорным пунктам
 
-### 1. Folder tree — самое важное, почти не описано
+### 1. Folder tree — стыковка между сервисами
 
-ТЗ: "выбор папки/проекта" упомянут вскользь, открытый вопрос #2 без ответа.
-Требование: **строго своё дерево папок**.
+Путь к данным профиля, который нужно знать фронту через API:
 
-Нужно уточнить:
-- **Корень дерева** — `$AGENT_DATA_DIR/sessions/<username>/` — только папки профиля
-- **Глубина** — до 2-3 уровней, не рекурсивно
-- **Что выбирает пользователь** — sub-папку внутри своего workDir, которая станет рабочей директорией для новой задачи
+| Что | Путь |
+|-----|------|
+| Рабочая директория профиля | `$AGENT_DATA_DIR/sessions/<username>/` |
+| Сессии | `$AGENT_DATA_DIR/sessions/<username>/sessions/` |
+| Выбор папки для новой задачи | sub-директории внутри workDir профиля |
 
-Нужен новый эндпоинт: `GET /web/files/tree` — возвращает дерево директорий профиля.
+Фронту достаточно одного эндпоинта `GET /web/files/tree` — он возвращает дерево директорий внутри workDir профиля до глубины 2. Корень жёстко привязан к профилю из JWT — пользователь физически не может вылезти за пределы своей папки.
 
 ```json
-{ "tree": [
-  { "name": "my-project", "path": "my-project", "type": "dir", "children": [...] },
-  { "name": "report.md",  "path": "report.md",  "type": "file" }
-]}
+{
+  "root": "/home/vova/agent-data/sessions/efi",
+  "tree": [
+    { "name": "my-project", "path": "my-project", "type": "dir" },
+    { "name": "cv-parsing",  "path": "cv-parsing",  "type": "dir" }
+  ]
+}
 ```
 
-**Security rule**: путь резолвится внутри workDir профиля. Path traversal (`../`) → 400.
+Security: любой `..` в пути → 400, symlinks не следуем.
 
 ---
 
-### 2. Typing inconsistency в ТЗ
+### 2. Путь к sessions в ТЗ
 
-В разделе "Что такое профиль" написано:
-```
-~/users/<username>/sessions/
-```
-Везде в коде — `$AGENT_DATA_DIR/sessions/<username>/`. Нужно исправить в README.
+В README написано `~/users/<username>/sessions/` — неверно.
+Правильно: `$AGENT_DATA_DIR/sessions/<username>/` (всегда через env var, не хардкод).
+Исправить в README.md репа trained-assist-web.
 
 ---
 
-### 3. Dual-stream: Telegram + Web одновременно
+### 3. Dual-stream: Telegram + Web
 
-Сейчас `_runTask` пушит в Telegram через `tgEdit`. ТЗ предлагает добавить `outputCallback`.
+Противоречия нет. Веб показывает **все** сессии профиля — независимо от того, откуда они запущены.
 
-Проблема: если задача запущена из Telegram, а пользователь открывает веб — нужно ли отдать live stream?
+Если пользователь отвечает из веба на сессию, которая началась из Telegram — это просто resume сессии с новым контекстом (как обычный `/web/run` с `sessionId`). Ответ стримится в веб. Слать ли его также в Telegram — для MVP не нужно, если это усложняет.
 
-Нужно решить явно:
-- **Вариант A (MVP)**: задачи из веба — только в веб, задачи из Telegram — только в Telegram
-- **Вариант B**: любая задача стримится в оба канала одновременно
-
-Рекомендую **Вариант A** — проще, нет race conditions.
-
-Реализация: `outputCallback` в `_runTask` + EventEmitter registry:
+Реализация: `outputCallback` в `_runTask` + EventEmitter registry в web-routes.js:
 ```js
-// в web-routes.js
 const taskStreams = new Map(); // taskId → EventEmitter
-// _runTask получает outputCallback который кладёт чанки в emitter
-// SSE-endpoint подписывается на emitter
+// runTask вызывается с outputCallback → пишет чанки в emitter
+// SSE endpoint подписывается на emitter
 ```
 
 ---
 
-### 4. Status "waiting for input" — не детектируется
+### 4. Статус "waiting for input"
 
-Session-store не хранит этот статус. Для MVP: убрать `waiting for input` из статусов.
-Оставить `running` / `completed` / `failed`.
-
-Статус `running` = есть запись в `activeTasks` Map в runner.js (нужно экспортировать функцию `isTaskRunning(username)`).
+Убрать из MVP. Оставить три статуса:
+- `running` — есть запись в `activeTasks` Map runner.js (экспортировать `isTaskRunning(username)`)
+- `completed` — задача завершена нормально
+- `failed` — ненулевой exit code
 
 ---
 
-### 5. WEB_JWT_SECRET — нужен на обоих VM
+### 5. WEB_JWT_SECRET — только GCP
 
-ТЗ упоминает только GCP Secret Manager. RU VM использует `~/secrets.env`.
-
-Нужно явно прописать в deploy-секции:
-- GCP: добавить в GCP Secret Manager + в `.github/workflows/ci.yml` → `printf` блок
-- RU VM: добавить в `/home/vova/secrets.env` вручную + в deploy workflow
+Веб-интерфейс деплоится только на GCP VM (`recruiter-assistant.ru`).
+RU VM не нужен. Значит:
+- `WEB_JWT_SECRET` только в GCP Secret Manager
+- В deploy workflow RU VM не трогаем
 
 ---
 
 ### 6. CSRF
 
-httpOnly cookie защищает от XSS, но state-changing POST (`/web/run`, `/web/reply`, `/web/stop`) без CSRF-токена уязвимы к cross-site form submit.
-
-Минимальная защита: проверять `Origin` header на все POST — должен совпадать с `AGENT_PUBLIC_URL`. Одна строка в web-routes.js.
-
----
-
-### 7. Reconnect при обрыве SSE
-
-ТЗ не описывает поведение при дропе соединения.
-
-Сервер: отдавать `event: ping` каждые 15с чтобы браузер знал что соединение живо.
-Frontend: `eventsource.onerror` → показать "Переподключение..." → retry через 3с.
+Проверять `Origin` header на все state-changing POST (`/web/run`, `/web/reply`, `/web/stop`).
+Должен совпадать с `process.env.AGENT_PUBLIC_URL`. Одна строка в middleware web-routes.js.
 
 ---
 
-### 8. Деплой статики — механизм не описан
+### 7. SSE reconnect
 
-ТЗ: "статика лежит в `src/public/` внутри trained-assist-agent".
+Сервер: `event: ping\ndata: {}\n\n` каждые 15с — браузер знает что соединение живо.
+Frontend: `eventsource.onerror` → показать "Переподключение..." → `setTimeout(connect, 3000)`.
 
-Два репо, один должен попасть в другой. Рекомендую **Вариант C** — клонировать при деплое агента:
+---
+
+### 8. Деплой статики
+
+При деплое агента на GCP VM — клонировать trained-assist-web и скопировать статику:
 ```bash
 # в deploy.sh агента:
 git clone https://github.com/trained-assist/trained-assist-web /tmp/web-ui
-mkdir -p ~/trained-assist-agent/src/public
-cp -r /tmp/web-ui/src/* ~/trained-assist-agent/src/public/
+mkdir -p src/public
+cp -r /tmp/web-ui/src/* src/public/
 ```
+Агент сам отдаёт `/web/*` как статику из `src/public/`.
 
 ---
 
-### 9. /web/reply/:id = /web/run с sessionId
+### 9. /web/reply = /web/run с sessionId
 
-ТЗ описывает два отдельных эндпоинта, но механизм одинаковый — новый Claude-вызов с контекстом сессии.
+`POST /web/reply/:id` и `POST /web/run` — одна и та же логика.
+Реализовать как один внутренний хелпер `startWebTask({ username, task, sessionId? })`.
+Оставить два эндпоинта для семантики, оба вызывают один хелпер.
 
-`POST /web/reply/:id` = `POST /web/run` с `sessionId` указанным в теле. Можно объединить или оставить два с одной логикой. Нужно прописать явно в ТЗ.
+---
+
+### 10. Ответы Claude рендерятся как Markdown — ключевое упрощение
+
+Claude уже выдаёт Markdown. В Telegram он рендерится через `parse_mode: Markdown` — но плохо (Telegram поддерживает только подмножество).
+
+В вебе можно рендерить **нормальный MD**: заголовки, код с подсветкой, списки, таблицы — всё.
+
+Это меняет подход к фронтенду:
+- Ответы Claude в истории сессии хранятся как plain text (уже так в session-store)
+- При отображении пропускаем через лёгкий MD-рендерер (например [marked.js](https://marked.js.org/) — 50кб, без зависимостей)
+- Live stream: чанки накапливаются в буфере → перерендер после каждого чанка
+- Не нужно разбирать tool calls, thinking blocks — Claude пишет их в читаемом виде
+
+**Результат**: пользователь видит красиво отформатированный ответ вместо сырого текста с `**` и `` ` ``. Это главное отличие веба от Telegram и главный UX-выигрыш.
+
+Реализация:
+```html
+<!-- в index.html -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+```
+```js
+// в app.js — рендер сообщения
+function renderMessage(text) {
+  el.innerHTML = marked.parse(text);
+}
+
+// live stream — накапливать буфер и ререндерить
+let buffer = '';
+eventsource.onmessage = ({ data }) => {
+  const msg = JSON.parse(data);
+  if (msg.type === 'chunk') {
+    buffer += msg.text;
+    renderMessage(buffer);
+  }
+};
+```
 
 ---
 
@@ -132,17 +159,17 @@ cp -r /tmp/web-ui/src/* ~/trained-assist-agent/src/public/
 **Файлы в агенте:** `src/web-auth.js`, правки `src/secrets.js`, `src/server.js`
 
 Реализовать:
-- `hashPassword(plain)` → scrypt hash, сохранить в `~/agent-tokens/<username>/.webpasswd`
+- `hashPassword(plain)` → scrypt hash → сохранить в `~/agent-tokens/<username>/.webpasswd` с mode 0o600
 - `verifyPassword(plain, hash)` → boolean
-- `signJwt(username)` → JWT с exp 24h
+- `signJwt(username)` → JWT exp 24h, подписан `WEB_JWT_SECRET`
 - `verifyJwt(token)` → username или null
-- `POST /web/auth` → verify → set cookie
-- `POST /admin/webpass` → hash → save → return plain password
-- Middleware: `webAuth(req)` → username или 401
+- `POST /web/auth` → verify → set httpOnly cookie `web_token`
+- `POST /admin/webpass` → Bearer `AGENT_SECRET` → hash → save → return plain password
+- Middleware `webAuth(req)` → username или 401
 
 **Тест план:**
 ```bash
-# Создать пароль
+# Создать пароль для профиля
 curl -X POST http://localhost:3001/admin/webpass \
   -H "Authorization: Bearer $AGENT_SECRET" \
   -H "Content-Type: application/json" \
@@ -168,53 +195,63 @@ curl -X POST http://localhost:3001/web/auth \
   -H "Content-Type: application/json" \
   -d '{"username":"testuser","password":"wrong"}'
 # → 401
+
+# /admin/webpass без AGENT_SECRET → 401
+curl -X POST http://localhost:3001/admin/webpass \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser"}'
+# → 401
 ```
 
 ---
 
 ### Этап 2: Backend — Sessions API
-**Файлы в агенте:** `src/web-routes.js` (начало)
+**Файлы в агенте:** `src/web-routes.js`
 
 Реализовать:
-- `GET /web/sessions` → читает sessions.json профиля, последние 20, добавляет поле `status`
-- `GET /web/session/:id` → читает `sessions/<id>.json`, messages + status
+- `GET /web/sessions` → sessions.json профиля, последние 20, + поле `status` (running/completed/failed)
+- `GET /web/session/:id` → `sessions/<id>.json` с messages + status
+- Изоляция: id сессии проверяется через sessions.json профиля — нельзя открыть чужую
 
 **Тест план:**
 ```bash
-# Список сессий
+# Список
 curl -b cookies.txt http://localhost:3001/web/sessions
 # → [{id, topic, lastAt, messageCount, status:"completed"}...]
 
-# Конкретная сессия
+# Сессия с историей
 curl -b cookies.txt http://localhost:3001/web/session/s-1234567890
-# → {id, topic, messages:[...], status:"completed"}
+# → {id, topic, messages:[{role,content,at}...], status:"completed"}
 
-# Чужая сессия — 404
-curl -b cookies.txt http://localhost:3001/web/session/s-other-profile-session
+# Чужая сессия — 404 (не в sessions.json профиля)
+curl -b cookies.txt http://localhost:3001/web/session/s-other-user
 # → 404
 
 # Несуществующая — 404
-curl -b cookies.txt http://localhost:3001/web/session/s-nonexistent
+curl -b cookies.txt http://localhost:3001/web/session/s-fake
 # → 404
 ```
 
 ---
 
-### Этап 3: Backend — outputCallback в runner.js
+### Этап 3: Backend — outputCallback в runner.js + isTaskRunning
 **Файлы в агенте:** `src/runner.js`
 
 Реализовать:
-- `outputCallback` опция в `_runTask` — если передана, вызывается на каждый stdout chunk
+- Параметр `outputCallback` в `_runTask(opts)` — если передан, вызывается на каждый stdout chunk
 - Вызывается параллельно с Telegram push (не вместо)
-- EventEmitter registry в `web-routes.js`: `taskStreams = new Map(taskId → EventEmitter)`
-- Экспортировать `isTaskRunning(username)` из runner.js для статуса сессий
+- `module.exports.isTaskRunning = (username) => ...` — проверяет activeTasks Map
 
 **Тест план:**
-```js
-// unit: запустить runTask с outputCallback, проверить что chunks приходят
-const chunks = [];
-await runTask({ ..., outputCallback: chunk => chunks.push(chunk) });
-assert(chunks.length > 0);
+```bash
+# Запустить задачу, проверить isTaskRunning через /stats или временный эндпоинт
+curl -b cookies.txt -X POST http://localhost:3001/web/run \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:3001" \
+  -d '{"task":"подожди 10 секунд потом скажи привет"}'
+# Пока идёт:
+curl -b cookies.txt http://localhost:3001/web/sessions
+# → [{..., status:"running"}]
 ```
 
 ---
@@ -223,27 +260,35 @@ assert(chunks.length > 0);
 **Файлы в агенте:** `src/web-routes.js`
 
 Реализовать:
-- `POST /web/run` → taskId → emitter → `runTask` с outputCallback → SSE stream
+- `POST /web/run` + `POST /web/reply/:sessionId` → один хелпер `startWebTask`
+- Хелпер: создаёт EventEmitter → вызывает `runTask` с `outputCallback` → возвращает emitter
+- SSE endpoint: подписывается на emitter → пишет `data: {...}\n\n`
+- Ping каждые 15с: `event: ping\ndata: {}\n\n`
 - Origin check на все POST
-- SSE ping каждые 15с
 - `POST /web/stop/:sessionId` → `stopUserTask(username)`
-- `POST /web/reply/:sessionId` → как /web/run но с sessionId
 
 **Тест план:**
 ```bash
-# Запустить и получить SSE
+# Запуск задачи + SSE
 curl -b cookies.txt -N -X POST http://localhost:3001/web/run \
   -H "Content-Type: application/json" \
-  -H "Origin: https://recruiter-assistant.ru" \
+  -H "Origin: http://localhost:3001" \
   -d '{"task":"скажи одно слово: привет"}'
-# → data: {"type":"chunk","text":"привет"}
+# → data: {"type":"chunk","text":"привет\n"}
 # → data: {"type":"done","sessionId":"s-xxx"}
+
+# Resume существующей сессии
+curl -b cookies.txt -N -X POST http://localhost:3001/web/reply/s-xxx \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:3001" \
+  -d '{"message":"теперь скажи пока"}'
+# → data: {"type":"chunk","text":"пока\n"}
 
 # Стоп
 curl -b cookies.txt -X POST http://localhost:3001/web/stop/s-xxx
 # → {"ok":true}
 
-# Origin check: без Origin → 403
+# Origin check — 403
 curl -b cookies.txt -X POST http://localhost:3001/web/run \
   -H "Content-Type: application/json" \
   -d '{"task":"test"}'
@@ -256,47 +301,48 @@ curl -b cookies.txt -X POST http://localhost:3001/web/run \
 **Файлы в агенте:** `src/web-routes.js`
 
 Реализовать:
-- `GET /web/files/tree` → walk workDir профиля до глубины 2
-- Запрещены `..` в пути, symlinks за пределы workDir
-- Возвращает директории (для выбора workDir новой задачи)
+- `GET /web/files/tree` → walk workDir профиля до глубины 2, только директории
+- Path резолвится строго внутри workDir через `path.resolve` + проверка prefix
+- Symlinks не следуем (`fs.lstatSync` вместо `fs.statSync`)
 
 **Тест план:**
 ```bash
-# Базовый
+# Базовый — возвращает дерево
 curl -b cookies.txt http://localhost:3001/web/files/tree
-# → {"root":"/home/vova/agent-data/sessions/testuser","tree":[...dirs...]}
+# → {"root":"/home/vova/agent-data/sessions/testuser","tree":[{"name":"proj","path":"proj","type":"dir"}]}
 
 # Path traversal — 400
 curl -b cookies.txt "http://localhost:3001/web/files/tree?path=../../etc"
 # → 400
 
-# Профиль без sub-папок — пустой tree, не 404
+# Пустой профиль — пустой массив, не 404
 # → {"root":"...","tree":[]}
 ```
 
 ---
 
-### Этап 6: Frontend
+### Этап 6: Frontend — Markdown-first
 **Файлы в этом репо:** `src/login.html`, `src/index.html`, `src/app.js`, `src/style.css`
 
-Реализовать:
-- `login.html` — форма username/password → POST /web/auth → redirect на /web/
-- `index.html` — список сессий + кнопка "Новая задача"
-- Сессия: история + SSE стрим → live обновление
-- Folder picker: дерево из GET /web/files/tree → select-список
-- Кнопка Stop
-- SSE reconnect: onerror → "Переподключение..." → retry через 3с
+Ключевое решение: **все ответы Claude рендерятся как Markdown** через marked.js.
 
-**Тест план (ручной browser flow):**
+Реализовать:
+- `login.html` — форма username/password → POST /web/auth → redirect
+- `index.html` — список сессий (topic, время, статус-бейдж) + кнопка "Новая задача"
+- Новая задача: folder picker из `/web/files/tree` + textarea задачи
+- Экран сессии: история (MD-рендер) + live stream (накопление буфера → перерендер)
+- Кнопка Stop
+- SSE reconnect: `onerror` → "Переподключение..." → retry через 3с
+
+**Тест план (ручной):**
 - `/web/login` без cookie → форма
-- Неверный пароль → "Неверный пароль"
-- Верный → redirect на `/web/`
-- Видим список сессий профиля
-- "Новая задача" → folder picker + поле задачи
-- Выбрать папку → ввести задачу → Submit → live stream появляется
+- Неверный пароль → сообщение об ошибке
+- Верный → список сессий
+- Открыть старую сессию → история с MD-рендером (жирный, код, списки отображаются нормально)
+- Новая задача → выбрать папку из дерева → ввести → Submit → live stream с MD
+- Stop → стрим обрывается
 - Refresh → сессия в списке, история сохранена
-- Вторая вкладка → тоже видит текущий stream
-- Stop → стрим обрывается, кнопка меняется
+- Имитировать обрыв сети (DevTools → Offline) → появляется "Переподключение..." → сеть восстановлена → поток возобновляется
 
 ---
 
@@ -305,25 +351,30 @@ curl -b cookies.txt "http://localhost:3001/web/files/tree?path=../../etc"
 
 Реализовать:
 - `/webpass <username>` — только operator chat ID
-- POST /admin/webpass на агент → пароль в ЛС оператору
+- `POST /admin/webpass` на агент → пароль в ЛС оператору (не в группу)
 
 **Тест план:**
 ```
 /webpass testuser
 → Пароль для testuser: xK9mP2qR
-# (в ЛС, не в группе)
 
-# Не оператор → молчим или "нет прав"
+# Не оператор → игнорируем
 ```
 
 ---
 
 ### Этап 8: Деплой
-**Файлы:** `deploy.sh` или CI в агенте
+**Файлы:** `deploy.sh` в агенте
 
-Реализовать:
-- При деплое агента: клонировать trained-assist-web → скопировать в `src/public/`
-- nginx: `/web/` → proxy_pass на агент порт 3001 (или агент сам отдаёт статику)
+Добавить шаг в deploy.sh:
+```bash
+git clone https://github.com/trained-assist/trained-assist-web /tmp/web-ui
+mkdir -p src/public
+rm -rf src/public/*
+cp -r /tmp/web-ui/src/* src/public/
+```
+
+Агент уже умеет отдавать статику — добавить роут `GET /web/*` → serve из `src/public/`.
 
 **Тест план:**
 ```bash
@@ -333,29 +384,33 @@ curl https://recruiter-assistant.ru/web/login -o /dev/null -w "%{http_code}"
 curl https://recruiter-assistant.ru/web/sessions \
   -H "Cookie: web_token=invalid"
 # → 401
+
+# End-to-end: логин из браузера → список сессий → запустить задачу → увидеть MD-рендер
 ```
 
 ---
 
-## Приоритеты открытых вопросов из ТЗ
+## Решения по открытым вопросам из ТЗ
 
 | Вопрос | Решение |
 |--------|---------|
 | Домен? | `recruiter-assistant.ru/web/` — отдельный домен не нужен для MVP |
-| Выбор проекта? | `GET /web/files/tree` + select из своего дерева. Корень = workDir профиля |
-| JWT срок? | 24ч достаточно для MVP |
+| Выбор проекта? | `GET /web/files/tree`, корень = workDir профиля, select-список на фронте |
+| JWT срок? | 24ч |
+| Dual-stream? | Раздельно для MVP: web-задачи → только в веб. Resume Telegram-сессий из веба — без обратного push в Telegram |
+| WEB_JWT_SECRET на RU VM? | Не нужен — веб только на GCP |
 
 ---
 
 ## Что брать из claude-session-manager, что не брать
 
 **Брать:**
-- Паттерн SSE стриминга (EventEmitter → response.write)
-- Паттерн reconnect в frontend (onerror + setTimeout retry)
+- Паттерн SSE (EventEmitter → `res.write('data: ...\n\n')`)
+- Паттерн reconnect в frontend (`eventsource.onerror` + setTimeout)
 
 **Не брать:**
-- SQLite DB — в агенте уже есть session-store с JSON
+- SQLite — в агенте уже session-store с JSON-файлами
 - scanner/process-detector — у агента своя activeTasks Map
-- Next.js — ТЗ правильно говорит vanilla JS
+- Next.js — vanilla JS достаточно
 - title-generator, analytics, archiver — лишнее для MVP
-- macos-terminal-control — на VM не нужно
+- macos-terminal-control — на Linux VM не нужно
