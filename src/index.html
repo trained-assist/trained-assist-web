@@ -11,41 +11,41 @@
   <div class="container" id="app">
 
     <!-- Loading -->
-    <div id="view-loading" style="padding:48px 0;text-align:center">
+    <div id="view-loading" data-testid="view-loading" role="status" aria-live="polite" style="padding:48px 0;text-align:center">
       <div class="loading" style="justify-content:center">
         <div class="spinner"></div> Loading…
       </div>
     </div>
 
     <!-- Sessions list -->
-    <div id="view-sessions" class="hidden">
+    <div id="view-sessions" class="hidden" data-testid="view-sessions">
       <nav class="nav">
         <span class="nav-title">Claude Assistant</span>
-        <button class="btn btn-primary" id="btn-new">+ New</button>
-        <button class="btn btn-ghost" id="btn-logout">Logout</button>
+        <button class="btn btn-primary" id="btn-new" data-testid="new-session">+ New</button>
+        <button class="btn btn-ghost" id="btn-logout" data-testid="logout">Logout</button>
       </nav>
       <div class="card">
         <div class="section-header">
           <h2>Sessions</h2>
         </div>
-        <div id="sessions-list"></div>
+        <div id="sessions-list" data-testid="sessions-list"></div>
       </div>
     </div>
 
     <!-- Session detail -->
-    <div id="view-session" class="hidden">
+    <div id="view-session" class="hidden" data-testid="view-session">
       <nav class="nav">
-        <a class="nav-back" id="btn-back" href="#">← Sessions</a>
-        <span class="nav-title" id="session-title"></span>
-        <button class="btn btn-danger hidden" id="btn-stop">Stop</button>
+        <a class="nav-back" id="btn-back" data-testid="back-to-sessions" href="#">← Sessions</a>
+        <span class="nav-title" id="session-title" data-testid="session-title"></span>
+        <button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session">Stop</button>
       </nav>
       <div class="card" id="session-card">
-        <div id="messages-container" class="messages"></div>
-        <div id="stream-area" class="stream-area hidden"></div>
-        <div id="reconnect-notice" class="reconnect-notice hidden">Reconnecting…</div>
+        <div id="messages-container" class="messages" data-testid="messages"></div>
+        <div id="stream-area" class="stream-area hidden" data-testid="stream" role="status" aria-live="polite"></div>
+        <div id="reconnect-notice" class="reconnect-notice hidden" data-testid="reconnect-notice" role="status" aria-live="polite">Reconnecting…</div>
         <div class="reply-form">
-          <textarea id="reply-input" placeholder="Reply (Ctrl+Enter to send)" rows="2"></textarea>
-          <button class="btn btn-primary" id="btn-send">Send</button>
+          <textarea id="reply-input" data-testid="reply-input" placeholder="Reply (Ctrl+Enter to send)" rows="2"></textarea>
+          <button class="btn btn-primary" id="btn-send" data-testid="send-reply">Send</button>
         </div>
       </div>
     </div>
@@ -53,22 +53,22 @@
   </div>
 
   <!-- New session modal -->
-  <div id="modal-new" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div id="modal-new" class="modal-overlay hidden" data-testid="new-session-modal" role="dialog" aria-modal="true" aria-label="New Session">
     <div class="modal">
       <h2>New Session</h2>
       <div class="field">
         <label for="folder-select">Project folder</label>
-        <select id="folder-select">
+        <select id="folder-select" data-testid="folder-select">
           <option value="">Loading folders…</option>
         </select>
       </div>
       <div class="field">
         <label for="task-input">Task</label>
-        <textarea id="task-input" rows="4" placeholder="Describe what Claude should do…"></textarea>
+        <textarea id="task-input" data-testid="task-input" rows="4" placeholder="Describe what Claude should do…"></textarea>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-ghost" id="btn-cancel-new">Cancel</button>
-        <button class="btn btn-primary" id="btn-start-new">Start</button>
+        <button class="btn btn-ghost" id="btn-cancel-new" data-testid="cancel-new">Cancel</button>
+        <button class="btn btn-primary" id="btn-start-new" data-testid="start-new">Start</button>
       </div>
     </div>
   </div>
