@@ -1,26 +1,19 @@
 // ─── Auth ──────────────────────────────────────────────────────────────────
-const TOKEN_KEY = 'wa_token';
-
-const getToken = () => localStorage.getItem(TOKEN_KEY);
-
-const requireAuth = () => {
-  if (!getToken()) { location.href = 'login.html'; return false; }
-  return true;
-};
+// The server issues a httpOnly cookie (`web_token`) that JS cannot read, so the
+// client can't check auth up-front. We optimistically render and let the first
+// API 401 bounce the user to the login page.
+const requireAuth = () => true;
 
 async function api(path, opts = {}) {
-  const token = getToken();
   const res = await fetch(path, {
     credentials: 'include',
     ...opts,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       ...opts.headers,
     },
   });
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
     location.href = 'login.html';
     throw new Error('Unauthorized');
   }
@@ -236,7 +229,6 @@ async function startStream(endpoint, body, appendUserMsg = null) {
     }
 
     try {
-      const token = getToken();
       const res = await fetch(endpoint, {
         method: 'POST',
         signal: streamAbort.signal,
@@ -244,10 +236,11 @@ async function startStream(endpoint, body, appendUserMsg = null) {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(body),
       });
+
+      if (res.status === 401) { location.href = 'login.html'; return; }
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -281,7 +274,14 @@ async function startStream(endpoint, body, appendUserMsg = null) {
               scrollBottom();
             } else if (msg.type === 'done') {
               const sid = msg.sessionId || currentSessionId;
-              if (sid) await loadSession(sid);
+              if (sid) {
+                currentSessionId = sid;
+                navigate(`/session/${sid}`, false); // reflect real id in the URL
+                await loadSession(sid);
+              } else {
+                // No id came back (e.g. task produced no session) — refresh the list
+                await loadSessions();
+              }
               return;
             } else if (msg.type === 'error') {
               streamEl.innerHTML = `<div class="err">${esc(msg.message || 'Error')}</div>`;
@@ -356,25 +356,17 @@ async function submitNewSession() {
   btn.textContent = 'Starting…';
 
   try {
-    // Create session
-    const res = await api('/web/sessions', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || `HTTP ${res.status}`);
-    }
-    const { id } = await res.json();
-
+    // The backend creates the session implicitly inside /web/run — no separate
+    // create step. We don't have an id yet; it arrives on the SSE `done` event.
     $('modal-new').classList.add('hidden');
-    currentSessionId = id;
-    navigate(`/session/${id}`, false); // update hash without re-loading
+    currentSessionId = null;
     showView('view-session');
-    $('session-title').textContent = path || id;
+    $('session-title').textContent = path || 'New session';
     $('messages-container').innerHTML = '';
 
-    await startStream('/web/run', { session: id, message }, message);
+    // MVP folder targeting: prepend the chosen folder to the task text.
+    const task = path ? `[Work in folder: ${path}]\n\n${message}` : message;
+    await startStream('/web/run', { task }, message);
   } catch (err) {
     alert('Error starting session: ' + err.message);
   } finally {
@@ -389,7 +381,7 @@ async function sendReply() {
   const message = input.value.trim();
   if (!message || !currentSessionId) return;
   input.value = '';
-  await startStream('/web/reply', { session: currentSessionId, message }, message);
+  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message }, message);
 }
 
 // ─── Stop ───────────────────────────────────────────────────────────────────
@@ -398,7 +390,7 @@ async function stopSession() {
   if (streamAbort) streamAbort.abort();
   clearInterval(pollTimer);
   try {
-    await api('/web/stop', { method: 'POST', body: JSON.stringify({ session: currentSessionId }) });
+    await api(`/web/stop/${encodeURIComponent(currentSessionId)}`, { method: 'POST' });
   } catch {}
   $('btn-stop').classList.add('hidden');
   $('stream-area').classList.add('hidden');
@@ -428,8 +420,8 @@ async function route() {
 // ─── Event listeners ────────────────────────────────────────────────────────
 $('btn-new').addEventListener('click', openNewModal);
 
-$('btn-logout').addEventListener('click', () => {
-  localStorage.removeItem(TOKEN_KEY);
+$('btn-logout').addEventListener('click', async () => {
+  try { await fetch('/web/logout', { method: 'POST', credentials: 'include' }); } catch {}
   location.href = 'login.html';
 });
 
