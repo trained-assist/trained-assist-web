@@ -1,0 +1,26 @@
+name: CI Failure Reporter
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'failure'
+    steps:
+      - name: Forward failure event to Session Manager
+        run: |
+          HTTP_CODE=$(curl -sS --max-time 10 \
+            -o /tmp/relay_resp.json \
+            -w "%{http_code}" \
+            -X POST "https://csm-relay.skillset-apply.workers.dev/github/${{ vars.RELAY_NODE_ID }}" \
+            -H "Content-Type: application/json" \
+            -H "x-github-event: workflow_run" \
+            -d @"$GITHUB_EVENT_PATH") || HTTP_CODE="000"
+          echo "Relay HTTP $HTTP_CODE"
+          cat /tmp/relay_resp.json || true
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
+            echo "::warning::Relay returned $HTTP_CODE"
+          fi
