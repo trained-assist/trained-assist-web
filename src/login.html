@@ -10,17 +10,17 @@
   <div class="auth-page">
     <div class="auth-card">
       <h1>Claude Assistant</h1>
-      <form id="form">
+      <form id="form" data-testid="login-form">
         <div class="field">
           <label for="username">Username</label>
-          <input type="text" id="username" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus required>
+          <input type="text" id="username" data-testid="login-username" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus required>
         </div>
         <div class="field">
           <label for="password">Access Password</label>
-          <input type="password" id="password" autocomplete="current-password" required>
+          <input type="password" id="password" data-testid="login-password" autocomplete="current-password" required>
         </div>
-        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Sign in</button>
-        <div id="err" class="err hidden"></div>
+        <button type="submit" class="btn btn-primary" data-testid="login-submit" style="width:100%;justify-content:center">Sign in</button>
+        <div id="err" class="err hidden" data-testid="login-error" role="alert" aria-live="assertive"></div>
       </form>
     </div>
   </div>

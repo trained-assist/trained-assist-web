@@ -75,7 +75,7 @@ async function loadSessions() {
     if (err.message !== 'Unauthorized') {
       showView('view-sessions');
       $('sessions-list').innerHTML =
-        '<div class="empty"><h3>Failed to load</h3><p>Check connection and try refreshing</p></div>';
+        '<div class="empty" data-testid="sessions-error" role="alert"><h3>Failed to load</h3><p>Check connection and try refreshing</p></div>';
     }
   }
 }
@@ -83,11 +83,11 @@ async function loadSessions() {
 function renderSessions(sessions) {
   const el = $('sessions-list');
   if (!sessions.length) {
-    el.innerHTML = '<div class="empty"><h3>No sessions yet</h3><p>Start a new session to begin</p></div>';
+    el.innerHTML = '<div class="empty" data-testid="sessions-empty"><h3>No sessions yet</h3><p>Start a new session to begin</p></div>';
     return;
   }
   el.innerHTML = sessions.map(s => `
-    <div class="session-item" data-id="${esc(s.id)}">
+    <div class="session-item" data-testid="session-item" data-id="${esc(s.id)}">
       <div class="session-info">
         <div class="session-path">${esc(s.topic || s.lastUserMessage || s.id)}</div>
         <div class="session-meta">${timeAgo(s.lastAt || s.createdAt)}${s.messageCount ? ` · ${s.messageCount} msg` : ''}</div>
@@ -123,7 +123,7 @@ async function loadSession(id) {
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       $('messages-container').innerHTML =
-        '<div class="empty"><h3>Failed to load session</h3></div>';
+        '<div class="empty" data-testid="session-error" role="alert"><h3>Failed to load session</h3></div>';
     }
   }
 }
@@ -138,10 +138,10 @@ function renderSession(session) {
 
   const container = $('messages-container');
   if (!msgs.length) {
-    container.innerHTML = '<div class="empty" style="padding:32px"><p>No messages yet</p></div>';
+    container.innerHTML = '<div class="empty" data-testid="messages-empty" style="padding:32px"><p>No messages yet</p></div>';
   } else {
     container.innerHTML = msgs.map(m => `
-      <div class="message message-${esc(m.role)}">
+      <div class="message message-${esc(m.role)}" data-testid="message" data-role="${esc(m.role)}">
         <div class="message-role">${m.role === 'user' ? 'You' : 'Claude'}</div>
         <div class="message-content${m.role === 'assistant' ? ' md-content' : ''}">${
           m.role === 'assistant' ? md(m.content) : esc(m.content)
@@ -284,7 +284,7 @@ async function startStream(endpoint, body, appendUserMsg = null) {
               }
               return;
             } else if (msg.type === 'error') {
-              streamEl.innerHTML = `<div class="err">${esc(msg.error || msg.message || 'Error')}</div>`;
+              streamEl.innerHTML = `<div class="err" data-testid="stream-error" role="alert">${esc(msg.error || msg.message || 'Error')}</div>`;
               finalise();
               return;
             }
@@ -303,7 +303,7 @@ async function startStream(endpoint, body, appendUserMsg = null) {
       if (attempt < 3) {
         await tryConnect(attempt + 1);
       } else {
-        streamEl.innerHTML = `<div class="err">Connection failed: ${esc(err.message)}</div>`;
+        streamEl.innerHTML = `<div class="err" data-testid="stream-error" role="alert">Connection failed: ${esc(err.message)}</div>`;
         finalise();
       }
     }
