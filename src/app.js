@@ -327,6 +327,47 @@ async function startStream(endpoint, body, appendUserMsg = null) {
   finalise();
 }
 
+// ─── Import sessions from files ───────────────────────────────────────────────
+// Reads one or more session JSON files (agent transcript format) and POSTs them
+// to /web/import so they appear in the list as history. Each file may hold a
+// single session object or an array of them.
+async function importFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const btn = $('btn-import');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  let total = 0, failed = 0;
+  try {
+    for (const file of files) {
+      try {
+        const parsed = JSON.parse(await file.text());
+        const res = await api('/web/import', { method: 'POST', body: JSON.stringify(parsed) });
+        const data = await res.json();
+        total += (data && data.imported) || 0;
+      } catch { failed++; }
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    $('import-file').value = '';
+  }
+  await loadSessions();
+  const note = failed
+    ? `Imported ${total} session(s), ${failed} file(s) failed to parse.`
+    : `Imported ${total} session(s).`;
+  const el = $('sessions-list');
+  const banner = document.createElement('div');
+  banner.className = 'empty';
+  banner.setAttribute('data-testid', 'import-result');
+  banner.setAttribute('role', 'status');
+  banner.style.cssText = 'padding:10px;margin-bottom:8px';
+  banner.textContent = note;
+  el.prepend(banner);
+  setTimeout(() => banner.remove(), 4000);
+}
+
 // ─── New session modal ──────────────────────────────────────────────────────
 async function openNewModal() {
   const modal = $('modal-new');
@@ -425,6 +466,9 @@ async function route() {
 
 // ─── Event listeners ────────────────────────────────────────────────────────
 $('btn-new').addEventListener('click', openNewModal);
+
+$('btn-import').addEventListener('click', () => $('import-file').click());
+$('import-file').addEventListener('change', e => importFiles(e.target.files));
 
 $('btn-logout').addEventListener('click', async () => {
   try { await fetch('/web/logout', { method: 'POST', credentials: 'include' }); } catch {}
