@@ -137,6 +137,19 @@ export class SessionHub {
       'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } });
   }
 
+  // Read the session token from the request cookies.
+  cookieToken(request) {
+    const raw = request.headers.get('cookie') || '';
+    const m = raw.match(/(?:^|;\s*)web_token=([^;]+)/);
+    return m ? m[1] : null;
+  }
+  // A request is authed iff it carries a token we issued (and haven't revoked).
+  async isAuthed(request) {
+    const t = this.cookieToken(request);
+    if (!t) return false;
+    return !!(await this.state.storage.get(`t:${t}`));
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const p = url.pathname;
@@ -145,12 +158,36 @@ export class SessionHub {
 
     if (p === '/healthz') return json(200, { ok: true });
 
+    // Fail closed: an unconfigured deploy (no DEMO_PASSWORD secret) is LOCKED,
+    // never open. This is a powerful tool behind a public URL — better a broken
+    // login than a public back door.
+    if (!PW) {
+      if (p === '/web/auth' && m === 'POST') return json(503, { error: 'Auth not configured' });
+      return json(503, { error: 'Locked: server password not configured' });
+    }
+
     if (p === '/web/auth' && m === 'POST') {
       const b = await body(request);
-      if (PW && b.password !== PW) return json(401, { error: 'Wrong password' });
-      return json(200, { ok: true }, { 'set-cookie': 'sid=demo; Path=/; SameSite=Lax' });
+      if (b.password !== PW) return json(401, { error: 'Wrong password' });
+      // Issue a fresh random session token, persist it, hand it back as an
+      // httpOnly+Secure cookie the browser JS can't read or forge.
+      const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
+      await this.state.storage.put(`t:${token}`, { at: Date.now() });
+      const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
+      return json(200, { ok: true }, { 'set-cookie': cookie });
     }
-    if (p === '/web/logout') return json(200, { ok: true });
+    if (p === '/web/logout') {
+      const t = this.cookieToken(request);
+      if (t) await this.state.storage.delete(`t:${t}`);
+      const cookie = 'web_token=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0';
+      return json(200, { ok: true }, { 'set-cookie': cookie });
+    }
+
+    // Every other /web/* endpoint requires a valid session token. Without this
+    // the login screen is cosmetic — the API would answer anyone with curl.
+    if (p.startsWith('/web/') && !(await this.isAuthed(request))) {
+      return json(401, { error: 'Unauthorized' });
+    }
     if (p === '/web/sessions') return json(200, this.listView());
     if (p.startsWith('/web/session/')) {
       const s = this.sessions.get(p.split('/').pop());
