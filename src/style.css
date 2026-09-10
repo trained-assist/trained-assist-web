@@ -66,6 +66,17 @@ body {
 .app-title { font-size: 16px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { display: flex; gap: 8px; align-items: center; }
 
+/* Compact header inside the left pane (replaces the full-width top bar) */
+.list-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.btn-icon { padding: 6px 9px; font-size: 15px; line-height: 1; }
+
 .panes {
   display: flex;
   flex: 1;

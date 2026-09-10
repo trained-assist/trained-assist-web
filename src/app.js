@@ -806,5 +806,26 @@ $('modal-new').addEventListener('click', e => {
 
 window.addEventListener('hashchange', route);
 
+// ─── Theme (light / dark) ─────────────────────────────────────────────────────
+// Stored choice wins; otherwise follow the OS. The button shows the theme you'd
+// switch TO, so ☀️ = "go light", 🌙 = "go dark".
+const prefersDark = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+const effectiveTheme = () => document.documentElement.getAttribute('data-theme')
+  || (prefersDark() ? 'dark' : 'light');
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = $('btn-theme');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+(function initTheme() {
+  const saved = localStorage.getItem('theme');
+  applyTheme(saved || (prefersDark() ? 'dark' : 'light'));
+})();
+$('btn-theme').addEventListener('click', () => {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme(next);
+});
+
 // ─── Boot ───────────────────────────────────────────────────────────────────
 route();

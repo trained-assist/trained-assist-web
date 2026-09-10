@@ -1,0 +1,14 @@
+WARNING: Node.js 20 is no longer supported by the Node.js community as of 30 April, 2026. Node.js 20 will be decommissioned on 2026-10-30. As of 2026-10-30 you will no longer be able to deploy your Cloud Functions using nodejs20. We recommend you to upgrade to the latest version of Node.js as soon as possible.
+ERROR: (gcloud.functions.deploy) [731388616698-compute@developer.gserviceaccount.com] does not have permission to access projects instance [alesa-personal-assistent] (or it may not exist): Cloud Resource Manager API has not been used in project 731388616698 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudresourcemanager.googleapis.com/overview?project=731388616698 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry. This command is authenticated as 731388616698-compute@developer.gserviceaccount.com which is the active account specified by the [core/account] property.
+Cloud Resource Manager API has not been used in project 731388616698 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudresourcemanager.googleapis.com/overview?project=731388616698 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.
+Google developers console API activation
+https://console.developers.google.com/apis/api/cloudresourcemanager.googleapis.com/overview?project=731388616698
+- '@type': type.googleapis.com/google.rpc.ErrorInfo
+  domain: googleapis.com
+  metadata:
+    activationUrl: https://console.developers.google.com/apis/api/cloudresourcemanager.googleapis.com/overview?project=731388616698
+    consumer: projects/731388616698
+    containerInfo: '731388616698'
+    service: cloudresourcemanager.googleapis.com
+    serviceTitle: Cloud Resource Manager API
+  reason: SERVICE_DISABLED

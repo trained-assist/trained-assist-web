@@ -10,18 +10,16 @@
 <body>
   <div class="app-shell" id="app" data-testid="app-shell">
 
-    <!-- Top bar -->
-    <header class="topbar">
-      <span class="app-title">Claude Assistant</span>
-      <div class="topbar-actions">
-        <button class="btn btn-ghost" id="btn-logout" data-testid="logout">Logout</button>
-      </div>
-    </header>
-
     <div class="panes">
 
-      <!-- Left pane: search + session list -->
+      <!-- Left pane: compact header + search + session list -->
       <aside class="pane-list" data-testid="pane-list">
+        <div class="list-header">
+          <span class="app-title">Claude Assistant</span>
+          <button class="btn btn-ghost btn-icon" id="btn-theme" data-testid="theme-toggle"
+                  title="Toggle light / dark" aria-label="Toggle light / dark theme">🌙</button>
+          <button class="btn btn-ghost" id="btn-logout" data-testid="logout">Logout</button>
+        </div>
         <div class="list-search">
           <input type="search" id="search-input" data-testid="search-input"
                  placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
