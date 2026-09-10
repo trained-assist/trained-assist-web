@@ -67,10 +67,21 @@
 
         <div class="reply-form">
           <label class="reply-label" for="reply-input">Reply</label>
-          <textarea id="reply-input" data-testid="reply-input" placeholder="Write a reply…  (Ctrl+Enter to send)"></textarea>
-          <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Send</button>
+          <textarea id="reply-input" data-testid="reply-input" placeholder="Write a reply…  (Ctrl+Enter to send · drag files or paste screenshots)"></textarea>
+          <div id="attachments" class="attachments hidden" data-testid="attachments"></div>
+          <div id="attach-hint" class="voice-status hidden" data-testid="attach-hint" role="status" aria-live="polite"></div>
+          <div id="voice-status" class="voice-status hidden" data-testid="voice-status" role="status" aria-live="polite"></div>
+          <div class="reply-buttons">
+            <button class="btn btn-ghost btn-mic" id="btn-mic" data-testid="mic-record" title="Dictate (voice input)" aria-label="Record voice">🎤 Voice</button>
+            <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Send</button>
+          </div>
         </div>
       </aside>
+    </div>
+
+    <!-- Full-window drop target for drag-and-drop file attachments -->
+    <div id="drop-overlay" class="drop-overlay hidden" data-testid="drop-overlay" aria-hidden="true">
+      <div class="drop-overlay-inner">⇩ Drop files to attach<small>documents &amp; screenshots · max 3MB each</small></div>
     </div>
   </div>
 

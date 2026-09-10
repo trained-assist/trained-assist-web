@@ -8,6 +8,23 @@ const json = (code, obj, extra = {}) =>
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function body(req) { try { return await req.json(); } catch { return {}; } }
 
+// Base64 helpers for storing/serving uploaded file bytes in DO storage. We chunk
+// the byte→string conversion so large files don't blow the argument stack of
+// String.fromCharCode.
+function b64FromBuffer(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function bufferFromB64(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const MAX_UPLOAD = 3 * 1024 * 1024; // 3MB per file — keeps DO storage values sane
+
 // All /web/* and /healthz traffic is routed to one named DO instance so every
 // request shares the same session store. Static assets bypass the DO.
 export default {
@@ -140,6 +157,59 @@ export class SessionHub {
       return s ? json(200, s) : json(404, { error: 'not found' });
     }
     if (p === '/web/files/tree') return json(200, { tree: [] });
+    // Voice input: proxy raw audio to Deepgram and return the transcript. The API
+    // key lives only server-side (env.DEEPGRAM_KEY); the browser never sees it.
+    // Returns { transcript, confidence, empty } — the client retries when empty
+    // (Deepgram occasionally swallows a short/quiet clip) and lets the user edit
+    // the draft before sending. Russian-first (language=ru), smart punctuation on.
+    if (p === '/web/transcribe' && m === 'POST') {
+      const key = this.env.DEEPGRAM_KEY;
+      if (!key) return json(500, { error: 'Deepgram key not configured' });
+      const audio = await request.arrayBuffer();
+      if (!audio || audio.byteLength < 512) return json(200, { transcript: '', empty: true });
+      const ct = request.headers.get('content-type') || 'audio/webm';
+      const dgUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&language=ru&smart_format=true&punctuate=true';
+      try {
+        const dg = await fetch(dgUrl, {
+          method: 'POST',
+          headers: { Authorization: `Token ${key}`, 'content-type': ct },
+          body: audio,
+        });
+        if (!dg.ok) {
+          const t = await dg.text().catch(() => '');
+          return json(502, { error: `Deepgram ${dg.status}`, detail: t.slice(0, 200) });
+        }
+        const data = await dg.json();
+        const alt = data?.results?.channels?.[0]?.alternatives?.[0] || {};
+        const transcript = (alt.transcript || '').trim();
+        return json(200, { transcript, confidence: alt.confidence ?? null, empty: !transcript });
+      } catch (e) {
+        return json(502, { error: 'Deepgram request failed', detail: String(e).slice(0, 200) });
+      }
+    }
+    // File attachments (drag-drop / paste in the UI). Upload holds the bytes in
+    // DO storage keyed by id; the reply/run body then references {id,name,type,size}
+    // and the message renders the attachment. Bytes are served back via /web/file/:id.
+    if (p === '/web/upload' && m === 'POST') {
+      const name = decodeURIComponent(request.headers.get('x-filename') || 'file');
+      const type = request.headers.get('content-type') || 'application/octet-stream';
+      const buf = await request.arrayBuffer();
+      const size = buf.byteLength;
+      if (!size) return json(400, { error: 'Empty file' });
+      if (size > MAX_UPLOAD) return json(413, { error: 'File too large (max 3MB)' });
+      const id = `f-${String(this.seq++).padStart(4, '0')}`;
+      await this.state.storage.put(`f:${id}`, { id, name, type, size, b64: b64FromBuffer(buf) });
+      await this.state.storage.put('seq', this.seq);
+      return json(200, { id, name, type, size, url: `/web/file/${id}` });
+    }
+    if (p.startsWith('/web/file/') && m === 'GET') {
+      const f = await this.state.storage.get(`f:${p.split('/').pop()}`);
+      if (!f) return json(404, { error: 'not found' });
+      return new Response(bufferFromB64(f.b64), { headers: {
+        'content-type': f.type,
+        'content-disposition': `inline; filename="${encodeURIComponent(f.name)}"`,
+        'cache-control': 'public, max-age=31536000' } });
+    }
     if (p === '/web/import' && m === 'POST') {
       const b = await body(request);
       const ids = this.importSessions(b);
@@ -154,13 +224,17 @@ export class SessionHub {
     }
     if (p === '/web/run' && m === 'POST') {
       const b = await body(request); const s = this.newSession(b.task);
+      if (Array.isArray(b.attachments) && b.attachments.length) s.messages[0].attachments = b.attachments;
       await this.persist(s);
       return this.streamReply(s, b.task || '');
     }
     if (p.startsWith('/web/reply/') && m === 'POST') {
       const s = this.sessions.get(decodeURIComponent(p.split('/').pop()));
       if (!s) return json(404, { error: 'no session' });
-      const b = await body(request); s.messages.push({ role: 'user', content: b.message || '' });
+      const b = await body(request);
+      const um = { role: 'user', content: b.message || '' };
+      if (Array.isArray(b.attachments) && b.attachments.length) um.attachments = b.attachments;
+      s.messages.push(um);
       await this.persist(s);
       return this.streamReply(s, b.message || '');
     }

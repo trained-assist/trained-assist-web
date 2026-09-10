@@ -162,6 +162,26 @@ async function loadSession(id) {
 // so long histories don't blow up the DOM / slow first paint.
 const COLLAPSE_TAIL = 6;
 
+function fmtSize(n) {
+  if (!n) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+// Render attachments carried on a stored message (thumbnails for images, a file
+// chip otherwise). Each links to /web/file/:id served by the worker.
+function attachmentsHtml(atts) {
+  if (!Array.isArray(atts) || !atts.length) return '';
+  const items = atts.map(a => {
+    const isImg = (a.type || '').startsWith('image/');
+    return isImg
+      ? `<a class="msg-attach msg-attach-img" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name)}"><img src="${esc(a.url)}" alt="${esc(a.name)}" loading="lazy"></a>`
+      : `<a class="msg-attach msg-attach-file" href="${esc(a.url)}" target="_blank" rel="noopener"><span class="attach-icon">📄</span><span class="attach-name">${esc(a.name)}</span><span class="attach-size">${esc(fmtSize(a.size))}</span></a>`;
+  }).join('');
+  return `<div class="msg-attachments" data-testid="msg-attachments">${items}</div>`;
+}
+
 function messageHtml(m) {
   return `
     <div class="message message-${esc(m.role)}" data-testid="message" data-role="${esc(m.role)}">
@@ -169,6 +189,7 @@ function messageHtml(m) {
       <div class="message-content${m.role === 'assistant' ? ' md-content' : ''}">${
         m.role === 'assistant' ? md(m.content) : esc(m.content)
       }</div>
+      ${attachmentsHtml(m.attachments)}
     </div>`;
 }
 
@@ -243,7 +264,7 @@ function startPolling(sessionId) {
 }
 
 // ─── SSE streaming via POST ─────────────────────────────────────────────────
-async function startStream(endpoint, body, appendUserMsg = null) {
+async function startStream(endpoint, body, appendUserMsg = null, appendAtts = null) {
   clearInterval(pollTimer);
   if (streamAbort) streamAbort.abort();
   streamAbort = new AbortController();
@@ -254,13 +275,13 @@ async function startStream(endpoint, body, appendUserMsg = null) {
   const input    = $('reply-input');
   const notice   = $('reconnect-notice');
 
-  if (appendUserMsg) {
+  if (appendUserMsg || (appendAtts && appendAtts.length)) {
     const c = $('messages-container');
     const empty = c.querySelector('.empty');
     if (empty) empty.remove();
     const div = document.createElement('div');
     div.className = 'message message-user';
-    div.innerHTML = `<div class="message-role">You</div><div class="message-content">${esc(appendUserMsg)}</div>`;
+    div.innerHTML = `<div class="message-role">You</div><div class="message-content">${esc(appendUserMsg || '')}</div>${attachmentsHtml(appendAtts)}`;
     c.appendChild(div);
     scrollBottom();
   }
@@ -483,13 +504,198 @@ async function submitNewSession() {
   }
 }
 
+// ─── File attachments (drag-drop / paste) ────────────────────────────────────
+// UX: dropping or pasting files just *stages* them as chips next to the reply —
+// nothing is uploaded yet, so the user can add/remove before committing. The
+// actual upload happens on Send (see sendReply), matching "insert the name now,
+// upload on submit". Images get a live thumbnail via a local object URL.
+const MAX_ATTACH = 3 * 1024 * 1024;
+let pendingAttachments = []; // { file, name, size, type, localUrl }
+
+function setAttachHint(text, kind = '') {
+  const el = $('attach-hint');
+  if (!text) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.classList.remove('hidden');
+  el.className = `voice-status${kind ? ' voice-' + kind : ''}`;
+  el.textContent = text;
+}
+
+function renderAttachments() {
+  const el = $('attachments');
+  if (!pendingAttachments.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+  el.innerHTML = pendingAttachments.map((a, i) => `
+    <div class="attach-chip" data-testid="attach-chip" data-idx="${i}">
+      ${a.localUrl
+        ? `<img class="attach-thumb" src="${a.localUrl}" alt="">`
+        : `<span class="attach-icon">📄</span>`}
+      <span class="attach-name">${esc(a.name)}</span>
+      <span class="attach-size">${esc(fmtSize(a.size))}</span>
+      <button class="attach-remove" data-testid="attach-remove" data-idx="${i}" aria-label="Remove ${esc(a.name)}" title="Remove">✕</button>
+    </div>`).join('');
+  el.querySelectorAll('.attach-remove').forEach(b =>
+    b.addEventListener('click', () => removeAttachment(+b.dataset.idx)));
+}
+
+function removeAttachment(idx) {
+  const a = pendingAttachments[idx];
+  if (a && a.localUrl) URL.revokeObjectURL(a.localUrl);
+  pendingAttachments.splice(idx, 1);
+  renderAttachments();
+}
+
+function clearAttachments() {
+  pendingAttachments.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl));
+  pendingAttachments = [];
+  renderAttachments();
+}
+
+function addFiles(fileList) {
+  const files = [...(fileList || [])];
+  let skipped = 0;
+  for (const f of files) {
+    if (f.size > MAX_ATTACH) { skipped++; continue; }
+    const type = f.type || 'application/octet-stream';
+    pendingAttachments.push({
+      file: f,
+      name: f.name || (type.startsWith('image/') ? `screenshot.${(type.split('/')[1] || 'png')}` : 'file'),
+      size: f.size,
+      type,
+      localUrl: type.startsWith('image/') ? URL.createObjectURL(f) : null,
+    });
+  }
+  renderAttachments();
+  if (skipped) setAttachHint(`${skipped} file(s) skipped — max 3MB each`, 'error');
+  else if (files.length) setAttachHint(`${pendingAttachments.length} attachment(s) ready`, 'ok');
+}
+
+// Upload staged files to the worker, returning stored refs {id,name,type,size,url}.
+async function uploadPending() {
+  const refs = [];
+  for (const a of pendingAttachments) {
+    const res = await api('/web/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': a.type, 'x-filename': encodeURIComponent(a.name) },
+      body: a.file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.id) throw new Error(data.error || `upload failed (${res.status})`);
+    refs.push({ id: data.id, name: data.name, type: data.type, size: data.size, url: data.url });
+  }
+  return refs;
+}
+
 // ─── Reply ──────────────────────────────────────────────────────────────────
 async function sendReply() {
   const input   = $('reply-input');
   const message = input.value.trim();
-  if (!message || !currentSessionId) return;
+  if ((!message && !pendingAttachments.length) || !currentSessionId) return;
+
+  let attachments = [];
+  if (pendingAttachments.length) {
+    const btnSend = $('btn-send');
+    btnSend.disabled = true;
+    setAttachHint('Uploading…', 'busy');
+    try {
+      attachments = await uploadPending();
+    } catch (err) {
+      setAttachHint(`Upload failed: ${err.message}`, 'error');
+      btnSend.disabled = false;
+      return;
+    }
+    clearAttachments();
+    setAttachHint('');
+  }
+
   input.value = '';
-  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message }, message);
+  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message, attachments }, message, attachments);
+}
+
+// ─── Voice input (Deepgram) ──────────────────────────────────────────────────
+// Click to record, click again to stop. The audio is POSTed to /web/transcribe
+// (which proxies Deepgram server-side) and the transcript is *appended to the
+// reply draft* — never auto-sent, so the user reviews/edits before Send. Deepgram
+// occasionally swallows a short/quiet clip; on an empty result we auto-retry the
+// same audio once, then surface a "didn't catch that" hint.
+let mediaRecorder = null;
+let recordChunks = [];
+let recording = false;
+
+function setVoiceStatus(text, kind = '') {
+  const el = $('voice-status');
+  if (!text) { el.classList.add('hidden'); el.textContent = ''; el.removeAttribute('role'); return; }
+  el.classList.remove('hidden');
+  el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  el.className = `voice-status${kind ? ' voice-' + kind : ''}`;
+  el.textContent = text;
+}
+
+async function toggleRecording() {
+  const btn = $('btn-mic');
+  if (recording) { stopRecording(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    setVoiceStatus('Voice input not supported in this browser', 'error');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    setVoiceStatus('Microphone access denied', 'error');
+    return;
+  }
+  recordChunks = [];
+  const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  mediaRecorder.addEventListener('dataavailable', e => { if (e.data && e.data.size) recordChunks.push(e.data); });
+  mediaRecorder.addEventListener('stop', async () => {
+    stream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(recordChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    await transcribeBlob(blob);
+  });
+  mediaRecorder.start();
+  recording = true;
+  btn.classList.add('recording');
+  btn.textContent = '⏹ Stop';
+  btn.setAttribute('data-testid', 'mic-record');
+  setVoiceStatus('● Recording… click Stop when done', 'recording');
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  recording = false;
+  const btn = $('btn-mic');
+  btn.classList.remove('recording');
+  btn.textContent = '🎤 Voice';
+}
+
+async function transcribeBlob(blob, attempt = 0) {
+  const input = $('reply-input');
+  setVoiceStatus(attempt ? `Transcribing… (retry ${attempt})` : 'Transcribing…', 'busy');
+  try {
+    const res = await api('/web/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      body: blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (data.empty || !data.transcript) {
+      // Deepgram swallowed it — retry the same audio once before giving up.
+      if (attempt < 1) return transcribeBlob(blob, attempt + 1);
+      setVoiceStatus("Didn't catch that — try recording again", 'error');
+      return;
+    }
+    // Append to the existing draft so dictation can add to typed text.
+    const sep = input.value && !/\s$/.test(input.value) ? ' ' : '';
+    input.value = input.value + sep + data.transcript;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    setVoiceStatus('✓ Transcribed — review & Send', 'ok');
+    setTimeout(() => setVoiceStatus(''), 3000);
+  } catch (err) {
+    if (err.message !== 'Unauthorized') setVoiceStatus(`Transcription failed: ${err.message}`, 'error');
+  }
 }
 
 // ─── Stop ───────────────────────────────────────────────────────────────────
@@ -555,9 +761,41 @@ $('search-input').addEventListener('input', e => {
 
 $('btn-stop').addEventListener('click', stopSession);
 
+$('btn-mic').addEventListener('click', toggleRecording);
+
 $('btn-send').addEventListener('click', sendReply);
 $('reply-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendReply(); }
+});
+
+// ─── Drag-and-drop + paste of files ───────────────────────────────────────────
+// A full-window overlay appears while dragging files in; drop stages them as
+// attachment chips (upload deferred to Send). Paste captures screenshots pasted
+// straight into the reply box.
+const dropOverlay = $('drop-overlay');
+let dragDepth = 0;
+const hasFiles = dt => dt && [...dt.types || []].includes('Files');
+
+window.addEventListener('dragenter', e => {
+  if (!hasFiles(e.dataTransfer)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.classList.remove('hidden');
+});
+window.addEventListener('dragover', e => { if (hasFiles(e.dataTransfer)) e.preventDefault(); });
+window.addEventListener('dragleave', () => {
+  if (--dragDepth <= 0) { dragDepth = 0; dropOverlay.classList.add('hidden'); }
+});
+window.addEventListener('drop', e => {
+  if (!e.dataTransfer || !e.dataTransfer.files.length) { dropOverlay.classList.add('hidden'); dragDepth = 0; return; }
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.classList.add('hidden');
+  addFiles(e.dataTransfer.files);
+});
+$('reply-input').addEventListener('paste', e => {
+  const files = e.clipboardData && e.clipboardData.files;
+  if (files && files.length) { e.preventDefault(); addFiles(files); }
 });
 
 $('btn-cancel-new').addEventListener('click', () => $('modal-new').classList.add('hidden'));
