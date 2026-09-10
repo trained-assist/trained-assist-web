@@ -8,50 +8,63 @@
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 </head>
 <body>
-  <div class="container" id="app">
+  <div class="app-shell" id="app" data-testid="app-shell">
 
-    <!-- Loading -->
-    <div id="view-loading" data-testid="view-loading" role="status" aria-live="polite" style="padding:48px 0;text-align:center">
-      <div class="loading" style="justify-content:center">
-        <div class="spinner"></div> Loading…
-      </div>
-    </div>
-
-    <!-- Sessions list -->
-    <div id="view-sessions" class="hidden" data-testid="view-sessions">
-      <nav class="nav">
-        <span class="nav-title">Claude Assistant</span>
+    <!-- Top bar -->
+    <header class="topbar">
+      <span class="app-title">Claude Assistant</span>
+      <div class="topbar-actions">
         <button class="btn btn-primary" id="btn-new" data-testid="new-session">+ New</button>
         <button class="btn btn-ghost" id="btn-import" data-testid="import-sessions">↥ Import</button>
         <input type="file" id="import-file" data-testid="import-file" accept=".json,application/json" multiple hidden>
         <button class="btn btn-ghost" id="btn-logout" data-testid="logout">Logout</button>
-      </nav>
-      <div class="card">
-        <div class="section-header">
-          <h2>Sessions</h2>
-        </div>
-        <div id="sessions-list" data-testid="sessions-list"></div>
       </div>
-    </div>
+    </header>
 
-    <!-- Session detail -->
-    <div id="view-session" class="hidden" data-testid="view-session">
-      <nav class="nav">
-        <a class="nav-back" id="btn-back" data-testid="back-to-sessions" href="#">← Sessions</a>
-        <span class="nav-title" id="session-title" data-testid="session-title"></span>
-        <button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session">Stop</button>
-      </nav>
-      <div class="card" id="session-card">
-        <div id="messages-container" class="messages" data-testid="messages"></div>
-        <div id="stream-area" class="stream-area hidden" data-testid="stream" role="status" aria-live="polite"></div>
-        <div id="reconnect-notice" class="reconnect-notice hidden" data-testid="reconnect-notice" role="status" aria-live="polite">Reconnecting…</div>
-        <div class="reply-form">
-          <textarea id="reply-input" data-testid="reply-input" placeholder="Reply (Ctrl+Enter to send)" rows="2"></textarea>
-          <button class="btn btn-primary" id="btn-send" data-testid="send-reply">Send</button>
+    <div class="panes">
+
+      <!-- Left pane: search + session list -->
+      <aside class="pane-list" data-testid="pane-list">
+        <div class="list-search">
+          <input type="search" id="search-input" data-testid="search-input"
+                 placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
         </div>
-      </div>
-    </div>
+        <div id="sessions-list" class="list-scroll" data-testid="sessions-list" role="list"></div>
+      </aside>
 
+      <!-- Right pane: conversation -->
+      <section class="pane-convo" data-testid="pane-convo">
+
+        <!-- Placeholder when nothing selected -->
+        <div id="convo-empty" class="convo-empty" data-testid="convo-empty">
+          <div class="empty">
+            <h3>No session selected</h3>
+            <p>Pick a session on the left, or start a new one.</p>
+          </div>
+        </div>
+
+        <!-- Active conversation -->
+        <div id="convo" class="convo hidden">
+          <div class="convo-header">
+            <button class="nav-back mobile-only" id="btn-back" data-testid="back-to-sessions" aria-label="Back to sessions">←</button>
+            <span class="convo-title" id="session-title" data-testid="session-title"></span>
+            <span id="session-status" data-testid="session-status"></span>
+            <button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session" title="Kill this session">✕ Kill</button>
+          </div>
+
+          <div id="messages-container" class="messages" data-testid="messages"></div>
+
+          <div id="stream-area" class="stream-area hidden" data-testid="stream" role="status" aria-live="polite"></div>
+          <div id="reconnect-notice" class="reconnect-notice hidden" data-testid="reconnect-notice" role="status" aria-live="polite">Reconnecting…</div>
+
+          <div class="reply-form">
+            <textarea id="reply-input" data-testid="reply-input" placeholder="Write a reply…  (Ctrl+Enter to send)" rows="3"></textarea>
+            <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Send</button>
+          </div>
+        </div>
+
+      </section>
+    </div>
   </div>
 
   <!-- New session modal -->
