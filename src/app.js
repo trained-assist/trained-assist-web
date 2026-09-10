@@ -224,6 +224,12 @@ async function startStream(endpoint, body, appendUserMsg = null) {
     if (attempt > 0) {
       notice.classList.remove('hidden');
       notice.textContent = `Reconnecting… (attempt ${attempt})`;
+      // The backend replays the stream from the start on every reconnect (we
+      // re-POST the same body), so drop whatever partial text we buffered on the
+      // dropped attempt — otherwise the replay concatenates and the preview shows
+      // duplicated/garbled output ("Working onWorking on it…").
+      buffer = '';
+      streamEl.innerHTML = '';
       await new Promise(r => setTimeout(r, 3000));
       if (streamAbort.signal.aborted) return;
     }
