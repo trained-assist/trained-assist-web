@@ -451,12 +451,22 @@ async function importFiles(fileList) {
 // ─── New session modal ──────────────────────────────────────────────────────
 async function openNewModal() {
   const modal = $('modal-new');
-  const sel   = $('folder-select');
   $('task-input').value = '';
+  // Reset the inline new-project form each time the modal opens.
+  $('new-project-form').classList.add('hidden');
+  $('new-project-name').value = '';
+  $('new-project-error').classList.add('hidden');
+  modal.classList.remove('hidden');
+  await loadFolders();
+}
+
+// Populate the project-folder select from the agent's project list. `selectPath`
+// pre-selects a project id (used right after creating one). Kept separate from
+// openNewModal so create-project can refresh the list without reopening.
+async function loadFolders(selectPath) {
+  const sel = $('folder-select');
   sel.innerHTML = '<option value="">Loading folders…</option>';
   sel.disabled  = true;
-  modal.classList.remove('hidden');
-
   try {
     const res  = await api('/web/files/tree');
     const data = await res.json();
@@ -467,9 +477,42 @@ async function openNewModal() {
       sel.innerHTML = '<option value="">Select a folder…</option>' +
         tree.map(f => `<option value="${esc(f.path)}">${esc(f.name)}</option>`).join('');
       sel.disabled = false;
+      if (selectPath) sel.value = selectPath;
     }
   } catch {
     sel.innerHTML = '<option value="">Failed to load folders</option>';
+  }
+}
+
+// Create a project via the worker → agent, then refresh the folder list and select
+// the new project. Errors surface in the inline role=alert box, not a blocking alert.
+async function createProject() {
+  const nameEl = $('new-project-name');
+  const typeEl = $('new-project-type');
+  const errEl  = $('new-project-error');
+  const btn    = $('btn-create-project');
+  const name   = nameEl.value.trim();
+  errEl.classList.add('hidden');
+  if (!name) { nameEl.focus(); return; }
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    const res = await api('/web/project-create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, type: typeEl.value || undefined }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.project) throw new Error(data.error || `HTTP ${res.status}`);
+    await loadFolders(data.project.id);
+    $('new-project-form').classList.add('hidden');
+    nameEl.value = '';
+  } catch (err) {
+    errEl.textContent = 'Could not create project: ' + err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create';
   }
 }
 
@@ -800,6 +843,15 @@ $('reply-input').addEventListener('paste', e => {
 
 $('btn-cancel-new').addEventListener('click', () => $('modal-new').classList.add('hidden'));
 $('btn-start-new').addEventListener('click', submitNewSession);
+$('btn-new-project').addEventListener('click', () => {
+  const form = $('new-project-form');
+  form.classList.toggle('hidden');
+  if (!form.classList.contains('hidden')) $('new-project-name').focus();
+});
+$('btn-create-project').addEventListener('click', createProject);
+$('new-project-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); createProject(); }
+});
 $('modal-new').addEventListener('click', e => {
   if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
 });

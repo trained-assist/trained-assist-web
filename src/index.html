@@ -89,9 +89,28 @@
       <h2>New Session</h2>
       <div class="field">
         <label for="folder-select">Project folder</label>
-        <select id="folder-select" data-testid="folder-select">
-          <option value="">Loading folders…</option>
-        </select>
+        <div class="folder-row">
+          <select id="folder-select" data-testid="folder-select">
+            <option value="">Loading folders…</option>
+          </select>
+          <button type="button" class="btn btn-ghost" id="btn-new-project" data-testid="new-project"
+                  title="Create a new project">＋ New project</button>
+        </div>
+      </div>
+      <!-- Inline new-project form (hidden until "＋ New project" is clicked) -->
+      <div class="field hidden" id="new-project-form" data-testid="new-project-form">
+        <label for="new-project-name">New project name</label>
+        <div class="folder-row">
+          <input id="new-project-name" data-testid="new-project-name" type="text"
+                 placeholder="e.g. recruiting: Backend dev" maxlength="120" />
+          <select id="new-project-type" data-testid="new-project-type">
+            <option value="">Generic</option>
+            <option value="recruiting">Recruiting</option>
+            <option value="expo">Exhibition</option>
+          </select>
+          <button type="button" class="btn btn-primary" id="btn-create-project" data-testid="create-project">Create</button>
+        </div>
+        <div id="new-project-error" class="hidden" role="alert" data-testid="new-project-error"></div>
       </div>
       <div class="field">
         <label for="task-input">Task</label>

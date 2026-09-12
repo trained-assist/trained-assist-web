@@ -442,6 +442,10 @@ input:focus, textarea:focus, select:focus {
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; color: var(--text-muted); }
 .err { color: var(--danger); font-size: 13px; margin-top: 8px; }
+.folder-row { display: flex; gap: 8px; align-items: center; }
+.folder-row select, .folder-row input { flex: 1 1 auto; min-width: 0; }
+.folder-row .btn { flex: 0 0 auto; white-space: nowrap; }
+#new-project-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 
 /* Loading */
 .loading { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 14px; }

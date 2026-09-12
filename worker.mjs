@@ -149,30 +149,100 @@ export class SessionHub {
     if (!t) return false;
     return !!(await this.state.storage.get(`t:${t}`));
   }
+  // The profile that owns this request's token (for delegating session reads).
+  async tokenUser(request) {
+    const t = this.cookieToken(request);
+    if (!t) return null;
+    const rec = await this.state.storage.get(`t:${t}`);
+    return (rec && rec.username) || this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+  }
+
+  // Delegate to the agent's stateless bearer endpoints for the REAL per-profile
+  // sessions (the ones the bot writes on every Telegram turn). AGENT_VERIFY_URL
+  // points at /web/verify; we swap the suffix. Returns [] / null on any failure
+  // so the UI degrades to just the local (imported/demo) sessions, never errors.
+  async agentSessions(username) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return [];
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/sessions-list'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, limit: 50 }),
+      });
+      if (r.status !== 200) return [];
+      const data = await r.json();
+      return Array.isArray(data.sessions) ? data.sessions : [];
+    } catch { return []; }
+  }
+  async agentSession(username, id) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return null;
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/session-get'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, id }),
+      });
+      if (r.status !== 200) return null;
+      const data = await r.json();
+      return data.session || null;
+    } catch { return null; }
+  }
 
   async fetch(request) {
     const url = new URL(request.url);
     const p = url.pathname;
     const m = request.method;
     const PW = this.env.DEMO_PASSWORD || null;
+    // Delegate login to the agent's per-profile password store when configured,
+    // so ANY password the bot generates works here automatically — no manual
+    // DEMO_PASSWORD sync. AGENT_VERIFY_URL points at the agent's /web/verify;
+    // AGENT_VERIFY_SECRET is the shared bearer it checks.
+    const AGENT_VERIFY = this.env.AGENT_VERIFY_URL || null;
+    const AGENT_VERIFY_SECRET = this.env.AGENT_VERIFY_SECRET || null;
+    const agentDelegation = !!(AGENT_VERIFY && AGENT_VERIFY_SECRET);
 
     if (p === '/healthz') return json(200, { ok: true });
 
-    // Fail closed: an unconfigured deploy (no DEMO_PASSWORD secret) is LOCKED,
-    // never open. This is a powerful tool behind a public URL — better a broken
-    // login than a public back door.
-    if (!PW) {
+    // Fail closed: a deploy with NO way to verify a password (neither a local
+    // DEMO_PASSWORD nor agent delegation) is LOCKED, never open. This is a
+    // powerful tool behind a public URL — better a broken login than a back door.
+    if (!PW && !agentDelegation) {
       if (p === '/web/auth' && m === 'POST') return json(503, { error: 'Auth not configured' });
       return json(503, { error: 'Locked: server password not configured' });
     }
 
     if (p === '/web/auth' && m === 'POST') {
       const b = await body(request);
-      if (b.password !== PW) return json(401, { error: 'Wrong password' });
+      let ok = false;
+      // Primary path: ask the agent to validate against its password store.
+      if (agentDelegation && b.password) {
+        const username = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+          ? b.username
+          : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
+        try {
+          const r = await fetch(AGENT_VERIFY, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+            body: JSON.stringify({ username, password: b.password }),
+          });
+          ok = r.status === 200;
+        } catch { ok = false; }
+      }
+      // Fallback: local DEMO_PASSWORD, for resilience if the agent is unreachable.
+      if (!ok && PW && b.password === PW) ok = true;
+      if (!ok) return json(401, { error: 'Wrong password' });
       // Issue a fresh random session token, persist it, hand it back as an
       // httpOnly+Secure cookie the browser JS can't read or forge.
+      // Resolve which profile logged in, so /web/sessions can pull THAT
+      // profile's real Telegram sessions from the agent. Falls back to the
+      // configured default profile when the form omits a username.
+      const loggedUser = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+        ? b.username
+        : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
       const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
-      await this.state.storage.put(`t:${token}`, { at: Date.now() });
+      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: loggedUser });
       const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
       return json(200, { ok: true }, { 'set-cookie': cookie });
     }
@@ -188,12 +258,95 @@ export class SessionHub {
     if (p.startsWith('/web/') && !(await this.isAuthed(request))) {
       return json(401, { error: 'Unauthorized' });
     }
-    if (p === '/web/sessions') return json(200, this.listView());
-    if (p.startsWith('/web/session/')) {
-      const s = this.sessions.get(p.split('/').pop());
-      return s ? json(200, s) : json(404, { error: 'not found' });
+    // Unified list: the profile's REAL Telegram/agent sessions (delegated) merged
+    // with any local imported/demo sessions in this DO, into ONE sorted list.
+    // Agent sessions are tagged origin:'agent' so /web/session/:id knows to
+    // delegate; local ones fall through to the DO map. Dedupe by id (DO wins on
+    // collision — an imported copy shadows the remote). No conflict with the
+    // existing web-created sessions: those keep origin:'local'.
+    if (p === '/web/sessions') {
+      const username = await this.tokenUser(request);
+      const remote = (await this.agentSessions(username)).map((s) => ({
+        id: s.id,
+        title: (s.topic || s.lastUserMessage || s.id || '').slice(0, 60),
+        topic: s.topic,
+        status: s.status,
+        lastMessage: '',
+        lastUserMessage: s.lastUserMessage,
+        createdAt: s.createdAt,
+        lastAt: s.lastAt,
+        messageCount: s.messageCount,
+        origin: 'agent',
+      }));
+      const local = this.listView().map((s) => ({ ...s, origin: 'local' }));
+      const byId = new Map();
+      for (const s of remote) byId.set(s.id, s);
+      for (const s of local) byId.set(s.id, s); // local shadows remote on id clash
+      const merged = [...byId.values()].sort(
+        (a, b) => (b.lastAt || b.createdAt || 0) - (a.lastAt || a.createdAt || 0));
+      return json(200, merged);
     }
-    if (p === '/web/files/tree') return json(200, { tree: [] });
+    if (p.startsWith('/web/session/')) {
+      const id = decodeURIComponent(p.split('/').pop());
+      const s = this.sessions.get(id);
+      if (s) return json(200, s); // local (imported/demo/web-created) session
+      // Not local → it's an agent/Telegram session: delegate to the agent.
+      const username = await this.tokenUser(request);
+      const remote = await this.agentSession(username, id);
+      return remote ? json(200, remote) : json(404, { error: 'not found' });
+    }
+    // Project list for the New Session picker. The projects live in the agent's
+    // per-profile projects/ model (single source of truth) — we delegate to its
+    // /web/projects endpoint rather than keeping a second list here, which would
+    // drift from the bot exactly like the password store did (see [028]). Flat,
+    // linear list — no tree. Falls back to [] (picker shows "No folders") if the
+    // agent is unreachable or the profile hasn't opted into projects yet.
+    if (p === '/web/files/tree') {
+      if (!agentDelegation) return json(200, { tree: [] });
+      const projectsUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/projects');
+      const username = this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+      try {
+        const r = await fetch(projectsUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify({ username }),
+        });
+        if (r.status !== 200) return json(200, { tree: [] });
+        const data = await r.json();
+        const tree = (data.projects || []).map(pr => ({
+          path: pr.id,
+          name: pr.label ? `${pr.label}: ${pr.name}` : pr.name,
+        }));
+        return json(200, { tree });
+      } catch {
+        return json(200, { tree: [] });
+      }
+    }
+    // Create a project. Delegates to the agent's /web/project-create (single source
+    // of truth — same projects/ model the bot uses). Creating the first project also
+    // opts the profile into the projects model. Body: {name, type?}. Returns the new
+    // {project}. 503 if the agent isn't reachable — we never create a local shadow
+    // project, or it would drift from the bot like the old password store did ([028]).
+    if (p === '/web/project-create' && m === 'POST') {
+      if (!agentDelegation) return json(503, { error: 'agent unavailable' });
+      const createUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/project-create');
+      const username = this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+      let bodyIn = {};
+      try { bodyIn = await request.json(); } catch { return json(400, { error: 'bad json' }); }
+      const name = (bodyIn.name || '').trim();
+      if (!name) return json(400, { error: 'name required' });
+      try {
+        const r = await fetch(createUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify({ username, name, type: bodyIn.type || undefined }),
+        });
+        const data = await r.json().catch(() => ({}));
+        return json(r.status, data);
+      } catch {
+        return json(503, { error: 'agent unavailable' });
+      }
+    }
     // Voice input: proxy raw audio to Deepgram and return the transcript. The API
     // key lives only server-side (env.DEEPGRAM_KEY); the browser never sees it.
     // Returns { transcript, confidence, empty } — the client retries when empty
