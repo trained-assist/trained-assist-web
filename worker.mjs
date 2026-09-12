@@ -1,0 +1,433 @@
+// Cloudflare Worker: same-origin /web/* backend for the trained-assist UI.
+// Static files (index.html, app.js, ...) are served from ./src via the [assets]
+// binding. The API + SSE streams live in a single Durable Object (SessionHub)
+// so session state is consistent across requests and persisted across restarts.
+const enc = new TextEncoder();
+const json = (code, obj, extra = {}) =>
+  new Response(JSON.stringify(obj), { status: code, headers: { 'content-type': 'application/json', ...extra } });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function body(req) { try { return await req.json(); } catch { return {}; } }
+
+// Base64 helpers for storing/serving uploaded file bytes in DO storage. We chunk
+// the byte→string conversion so large files don't blow the argument stack of
+// String.fromCharCode.
+function b64FromBuffer(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function bufferFromB64(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const MAX_UPLOAD = 3 * 1024 * 1024; // 3MB per file — keeps DO storage values sane
+
+// All /web/* and /healthz traffic is routed to one named DO instance so every
+// request shares the same session store. Static assets bypass the DO.
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const p = url.pathname;
+    if (p === '/healthz' || p.startsWith('/web/')) {
+      const id = env.SESSION_HUB.idFromName('global');
+      return env.SESSION_HUB.get(id).fetch(request);
+    }
+    return env.ASSETS.fetch(request);
+  },
+};
+
+export class SessionHub {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sessions = new Map();
+    this.seq = 1;
+    // Load persisted state before serving the first request.
+    this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.list({ prefix: 's:' });
+      for (const [, v] of stored) this.sessions.set(v.id, v);
+      this.seq = (await this.state.storage.get('seq')) || (this.sessions.size + 1);
+    });
+  }
+
+  async persist(s) {
+    await this.state.storage.put(`s:${s.id}`, s);
+    await this.state.storage.put('seq', this.seq);
+  }
+
+  newSession(task) {
+    const id = `s-${String(this.seq++).padStart(3, '0')}`;
+    const s = { id, title: (task || '').slice(0, 60) || 'New session', status: 'running',
+      createdAt: Date.now(), messages: [{ role: 'user', content: task || '' }], lastMessage: '' };
+    this.sessions.set(id, s);
+    return s;
+  }
+
+  listView() {
+    return [...this.sessions.values()]
+      .sort((a, b) => (b.lastAt || b.createdAt || 0) - (a.lastAt || a.createdAt || 0))
+      .map((s) => ({ id: s.id, title: s.title, topic: s.topic, status: s.status,
+        lastMessage: s.lastMessage, lastUserMessage: s.lastUserMessage,
+        createdAt: s.createdAt, lastAt: s.lastAt, messageCount: s.messageCount,
+        imported: s.imported }));
+  }
+
+  // Import externally-produced session files (e.g. agent transcripts copied off a
+  // Windows box). Accepts one session object, an array, or { sessions: [...] }.
+  // The agent file format is { id, topic, createdAt, lastAt, messageCount,
+  // messages: [{ role, content, at }] } — the UI already renders those fields, so
+  // we normalise and persist by id (re-import overwrites, so it's idempotent).
+  importSessions(payload) {
+    const arr = Array.isArray(payload) ? payload
+      : Array.isArray(payload && payload.sessions) ? payload.sessions
+      : (payload && payload.id) ? [payload] : [];
+    const ids = [];
+    for (const raw of arr) {
+      if (!raw || typeof raw !== 'object') continue;
+      const msgs = Array.isArray(raw.messages) ? raw.messages : [];
+      const id = String(raw.id || `import-${String(this.seq++).padStart(3, '0')}`);
+      const norm = msgs.map((mm) => ({
+        role: mm && mm.role === 'assistant' ? 'assistant' : 'user',
+        content: String((mm && mm.content) != null ? mm.content : ''),
+        at: mm && mm.at,
+      }));
+      const last = norm.length ? norm[norm.length - 1].content : (raw.lastMessage || '');
+      const s = {
+        id,
+        title: String(raw.title || raw.topic || raw.lastUserMessage || id).slice(0, 60),
+        topic: raw.topic || raw.title || '',
+        status: raw.status || 'completed',
+        createdAt: raw.createdAt || Date.now(),
+        lastAt: raw.lastAt || raw.createdAt || Date.now(),
+        messageCount: raw.messageCount || norm.length,
+        messages: norm,
+        lastMessage: last,
+        lastUserMessage: raw.lastUserMessage || '',
+        imported: true,
+      };
+      this.sessions.set(id, s);
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  streamReply(session, prompt) {
+    session.status = 'running';
+    const reply = `Received: “${prompt}”. Working on it… done.`;
+    const chunks = reply.match(/.{1,8}/g) || [reply];
+    const self = this;
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (o) => controller.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
+        send({}); // ping
+        let acc = '';
+        for (const c of chunks) { acc += c; send({ type: 'chunk', text: c }); await sleep(90); }
+        session.status = 'idle';
+        session.messages.push({ role: 'assistant', content: acc });
+        session.lastMessage = acc;
+        await self.persist(session);
+        send({ type: 'done', sessionId: session.id });
+        controller.close();
+      },
+    });
+    return new Response(stream, { headers: {
+      'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } });
+  }
+
+  // Read the session token from the request cookies.
+  cookieToken(request) {
+    const raw = request.headers.get('cookie') || '';
+    const m = raw.match(/(?:^|;\s*)web_token=([^;]+)/);
+    return m ? m[1] : null;
+  }
+  // A request is authed iff it carries a token we issued (and haven't revoked).
+  async isAuthed(request) {
+    const t = this.cookieToken(request);
+    if (!t) return false;
+    return !!(await this.state.storage.get(`t:${t}`));
+  }
+  // The profile that owns this request's token (for delegating session reads).
+  async tokenUser(request) {
+    const t = this.cookieToken(request);
+    if (!t) return null;
+    const rec = await this.state.storage.get(`t:${t}`);
+    return (rec && rec.username) || this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+  }
+
+  // Delegate to the agent's stateless bearer endpoints for the REAL per-profile
+  // sessions (the ones the bot writes on every Telegram turn). AGENT_VERIFY_URL
+  // points at /web/verify; we swap the suffix. Returns [] / null on any failure
+  // so the UI degrades to just the local (imported/demo) sessions, never errors.
+  async agentSessions(username) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return [];
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/sessions-list'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, limit: 50 }),
+      });
+      if (r.status !== 200) return [];
+      const data = await r.json();
+      return Array.isArray(data.sessions) ? data.sessions : [];
+    } catch { return []; }
+  }
+  async agentSession(username, id) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return null;
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/session-get'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, id }),
+      });
+      if (r.status !== 200) return null;
+      const data = await r.json();
+      return data.session || null;
+    } catch { return null; }
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const p = url.pathname;
+    const m = request.method;
+    const PW = this.env.DEMO_PASSWORD || null;
+    // Delegate login to the agent's per-profile password store when configured,
+    // so ANY password the bot generates works here automatically — no manual
+    // DEMO_PASSWORD sync. AGENT_VERIFY_URL points at the agent's /web/verify;
+    // AGENT_VERIFY_SECRET is the shared bearer it checks.
+    const AGENT_VERIFY = this.env.AGENT_VERIFY_URL || null;
+    const AGENT_VERIFY_SECRET = this.env.AGENT_VERIFY_SECRET || null;
+    const agentDelegation = !!(AGENT_VERIFY && AGENT_VERIFY_SECRET);
+
+    if (p === '/healthz') return json(200, { ok: true });
+
+    // Fail closed: a deploy with NO way to verify a password (neither a local
+    // DEMO_PASSWORD nor agent delegation) is LOCKED, never open. This is a
+    // powerful tool behind a public URL — better a broken login than a back door.
+    if (!PW && !agentDelegation) {
+      if (p === '/web/auth' && m === 'POST') return json(503, { error: 'Auth not configured' });
+      return json(503, { error: 'Locked: server password not configured' });
+    }
+
+    if (p === '/web/auth' && m === 'POST') {
+      const b = await body(request);
+      let ok = false;
+      // Primary path: ask the agent to validate against its password store.
+      if (agentDelegation && b.password) {
+        const username = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+          ? b.username
+          : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
+        try {
+          const r = await fetch(AGENT_VERIFY, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+            body: JSON.stringify({ username, password: b.password }),
+          });
+          ok = r.status === 200;
+        } catch { ok = false; }
+      }
+      // Fallback: local DEMO_PASSWORD, for resilience if the agent is unreachable.
+      if (!ok && PW && b.password === PW) ok = true;
+      if (!ok) return json(401, { error: 'Wrong password' });
+      // Issue a fresh random session token, persist it, hand it back as an
+      // httpOnly+Secure cookie the browser JS can't read or forge.
+      // Resolve which profile logged in, so /web/sessions can pull THAT
+      // profile's real Telegram sessions from the agent. Falls back to the
+      // configured default profile when the form omits a username.
+      const loggedUser = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+        ? b.username
+        : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
+      const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
+      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: loggedUser });
+      const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
+      return json(200, { ok: true }, { 'set-cookie': cookie });
+    }
+    if (p === '/web/logout') {
+      const t = this.cookieToken(request);
+      if (t) await this.state.storage.delete(`t:${t}`);
+      const cookie = 'web_token=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0';
+      return json(200, { ok: true }, { 'set-cookie': cookie });
+    }
+
+    // Every other /web/* endpoint requires a valid session token. Without this
+    // the login screen is cosmetic — the API would answer anyone with curl.
+    if (p.startsWith('/web/') && !(await this.isAuthed(request))) {
+      return json(401, { error: 'Unauthorized' });
+    }
+    // Unified list: the profile's REAL Telegram/agent sessions (delegated) merged
+    // with any local imported/demo sessions in this DO, into ONE sorted list.
+    // Agent sessions are tagged origin:'agent' so /web/session/:id knows to
+    // delegate; local ones fall through to the DO map. Dedupe by id (DO wins on
+    // collision — an imported copy shadows the remote). No conflict with the
+    // existing web-created sessions: those keep origin:'local'.
+    if (p === '/web/sessions') {
+      const username = await this.tokenUser(request);
+      const remote = (await this.agentSessions(username)).map((s) => ({
+        id: s.id,
+        title: (s.topic || s.lastUserMessage || s.id || '').slice(0, 60),
+        topic: s.topic,
+        status: s.status,
+        lastMessage: '',
+        lastUserMessage: s.lastUserMessage,
+        createdAt: s.createdAt,
+        lastAt: s.lastAt,
+        messageCount: s.messageCount,
+        origin: 'agent',
+      }));
+      const local = this.listView().map((s) => ({ ...s, origin: 'local' }));
+      const byId = new Map();
+      for (const s of remote) byId.set(s.id, s);
+      for (const s of local) byId.set(s.id, s); // local shadows remote on id clash
+      const merged = [...byId.values()].sort(
+        (a, b) => (b.lastAt || b.createdAt || 0) - (a.lastAt || a.createdAt || 0));
+      return json(200, merged);
+    }
+    if (p.startsWith('/web/session/')) {
+      const id = decodeURIComponent(p.split('/').pop());
+      const s = this.sessions.get(id);
+      if (s) return json(200, s); // local (imported/demo/web-created) session
+      // Not local → it's an agent/Telegram session: delegate to the agent.
+      const username = await this.tokenUser(request);
+      const remote = await this.agentSession(username, id);
+      return remote ? json(200, remote) : json(404, { error: 'not found' });
+    }
+    // Project list for the New Session picker. The projects live in the agent's
+    // per-profile projects/ model (single source of truth) — we delegate to its
+    // /web/projects endpoint rather than keeping a second list here, which would
+    // drift from the bot exactly like the password store did (see [028]). Flat,
+    // linear list — no tree. Falls back to [] (picker shows "No folders") if the
+    // agent is unreachable or the profile hasn't opted into projects yet.
+    if (p === '/web/files/tree') {
+      if (!agentDelegation) return json(200, { tree: [] });
+      const projectsUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/projects');
+      const username = this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+      try {
+        const r = await fetch(projectsUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify({ username }),
+        });
+        if (r.status !== 200) return json(200, { tree: [] });
+        const data = await r.json();
+        const tree = (data.projects || []).map(pr => ({
+          path: pr.id,
+          name: pr.label ? `${pr.label}: ${pr.name}` : pr.name,
+        }));
+        return json(200, { tree });
+      } catch {
+        return json(200, { tree: [] });
+      }
+    }
+    // Create a project. Delegates to the agent's /web/project-create (single source
+    // of truth — same projects/ model the bot uses). Creating the first project also
+    // opts the profile into the projects model. Body: {name, type?}. Returns the new
+    // {project}. 503 if the agent isn't reachable — we never create a local shadow
+    // project, or it would drift from the bot like the old password store did ([028]).
+    if (p === '/web/project-create' && m === 'POST') {
+      if (!agentDelegation) return json(503, { error: 'agent unavailable' });
+      const createUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/project-create');
+      const username = this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+      let bodyIn = {};
+      try { bodyIn = await request.json(); } catch { return json(400, { error: 'bad json' }); }
+      const name = (bodyIn.name || '').trim();
+      if (!name) return json(400, { error: 'name required' });
+      try {
+        const r = await fetch(createUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify({ username, name, type: bodyIn.type || undefined }),
+        });
+        const data = await r.json().catch(() => ({}));
+        return json(r.status, data);
+      } catch {
+        return json(503, { error: 'agent unavailable' });
+      }
+    }
+    // Voice input: proxy raw audio to Deepgram and return the transcript. The API
+    // key lives only server-side (env.DEEPGRAM_KEY); the browser never sees it.
+    // Returns { transcript, confidence, empty } — the client retries when empty
+    // (Deepgram occasionally swallows a short/quiet clip) and lets the user edit
+    // the draft before sending. Russian-first (language=ru), smart punctuation on.
+    if (p === '/web/transcribe' && m === 'POST') {
+      const key = this.env.DEEPGRAM_KEY;
+      if (!key) return json(500, { error: 'Deepgram key not configured' });
+      const audio = await request.arrayBuffer();
+      if (!audio || audio.byteLength < 512) return json(200, { transcript: '', empty: true });
+      const ct = request.headers.get('content-type') || 'audio/webm';
+      const dgUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&language=ru&smart_format=true&punctuate=true';
+      try {
+        const dg = await fetch(dgUrl, {
+          method: 'POST',
+          headers: { Authorization: `Token ${key}`, 'content-type': ct },
+          body: audio,
+        });
+        if (!dg.ok) {
+          const t = await dg.text().catch(() => '');
+          return json(502, { error: `Deepgram ${dg.status}`, detail: t.slice(0, 200) });
+        }
+        const data = await dg.json();
+        const alt = data?.results?.channels?.[0]?.alternatives?.[0] || {};
+        const transcript = (alt.transcript || '').trim();
+        return json(200, { transcript, confidence: alt.confidence ?? null, empty: !transcript });
+      } catch (e) {
+        return json(502, { error: 'Deepgram request failed', detail: String(e).slice(0, 200) });
+      }
+    }
+    // File attachments (drag-drop / paste in the UI). Upload holds the bytes in
+    // DO storage keyed by id; the reply/run body then references {id,name,type,size}
+    // and the message renders the attachment. Bytes are served back via /web/file/:id.
+    if (p === '/web/upload' && m === 'POST') {
+      const name = decodeURIComponent(request.headers.get('x-filename') || 'file');
+      const type = request.headers.get('content-type') || 'application/octet-stream';
+      const buf = await request.arrayBuffer();
+      const size = buf.byteLength;
+      if (!size) return json(400, { error: 'Empty file' });
+      if (size > MAX_UPLOAD) return json(413, { error: 'File too large (max 3MB)' });
+      const id = `f-${String(this.seq++).padStart(4, '0')}`;
+      await this.state.storage.put(`f:${id}`, { id, name, type, size, b64: b64FromBuffer(buf) });
+      await this.state.storage.put('seq', this.seq);
+      return json(200, { id, name, type, size, url: `/web/file/${id}` });
+    }
+    if (p.startsWith('/web/file/') && m === 'GET') {
+      const f = await this.state.storage.get(`f:${p.split('/').pop()}`);
+      if (!f) return json(404, { error: 'not found' });
+      return new Response(bufferFromB64(f.b64), { headers: {
+        'content-type': f.type,
+        'content-disposition': `inline; filename="${encodeURIComponent(f.name)}"`,
+        'cache-control': 'public, max-age=31536000' } });
+    }
+    if (p === '/web/import' && m === 'POST') {
+      const b = await body(request);
+      const ids = this.importSessions(b);
+      for (const id of ids) await this.persist(this.sessions.get(id));
+      await this.state.storage.put('seq', this.seq);
+      return json(200, { ok: true, imported: ids.length, ids });
+    }
+    if (p.startsWith('/web/stop/') && m === 'POST') {
+      const s = this.sessions.get(p.split('/').pop());
+      if (s) { s.status = 'idle'; await this.persist(s); }
+      return json(200, { ok: true });
+    }
+    if (p === '/web/run' && m === 'POST') {
+      const b = await body(request); const s = this.newSession(b.task);
+      if (Array.isArray(b.attachments) && b.attachments.length) s.messages[0].attachments = b.attachments;
+      await this.persist(s);
+      return this.streamReply(s, b.task || '');
+    }
+    if (p.startsWith('/web/reply/') && m === 'POST') {
+      const s = this.sessions.get(decodeURIComponent(p.split('/').pop()));
+      if (!s) return json(404, { error: 'no session' });
+      const b = await body(request);
+      const um = { role: 'user', content: b.message || '' };
+      if (Array.isArray(b.attachments) && b.attachments.length) um.attachments = b.attachments;
+      s.messages.push(um);
+      await this.persist(s);
+      return this.streamReply(s, b.message || '');
+    }
+    return json(404, { error: 'not found' });
+  }
+}
