@@ -72,9 +72,49 @@ function highlightActive(id) {
     el.classList.toggle('active', el.dataset.id === id));
 }
 
+// The "Продолжай" button is the recovery affordance for a session that has
+// stopped (idle / completed / failed — e.g. killed at the 38-min SIGTERM). It's
+// only meaningful when a session is selected AND nothing is currently streaming,
+// so it's the mutual opposite of the Kill button. One helper, called wherever
+// Kill's visibility changes, keeps the two in sync.
+function showContinue(show) {
+  $('btn-continue').classList.toggle('hidden', !show);
+}
+
+// ─── Profile ────────────────────────────────────────────────────────────────
+// Show which profile is signed in, so an operator sharing this URL across
+// several profiles always knows whose sessions they're looking at. The server
+// resolves it from the httpOnly token; the browser can't read the token, so we
+// ask /web/me. Failure is non-fatal — the label just stays empty.
+async function loadProfile() {
+  try {
+    const res = await api('/web/me');
+    const { username } = await res.json();
+    if (username) $('profile-label').textContent = username;
+  } catch { /* label stays empty */ }
+}
+
 // ─── Sessions list ──────────────────────────────────────────────────────────
 let allSessions = [];        // full set, cached for client-side search
 let searchQuery = '';
+let showTests = false;       // reveal auto-hidden trivial test/demo sessions
+
+// A trivial test/demo session: the shape of a manual "does it still work?" poke,
+// not real work — a ≤2-message exchange whose visible text is all short, plus the
+// known seeded-demo / Playwright / chaos fixture id prefixes. These are hidden by
+// default to keep the list clean, but only hidden (never dropped) — a toggle and
+// any active search bring them back (see renderSessions).
+function isTestSession(s) {
+  if (/^(s-00[12]$|ui-test-|chaos-|test-|demo-)/.test(s.id || '')) return true;
+  const n = s.messageCount;
+  if (n != null && n <= 2) {
+    const longest = Math.max(
+      (s.title || '').length, (s.topic || '').length,
+      (s.lastUserMessage || '').length, (s.lastMessage || '').length);
+    if (longest <= 40) return true;
+  }
+  return false;
+}
 
 async function loadSessions() {
   if (!allSessions.length) {
@@ -103,16 +143,36 @@ function matchesSearch(s, q) {
 function renderSessions() {
   const el = $('sessions-list');
   const q = searchQuery.trim().toLowerCase();
-  const list = allSessions.filter(s => matchesSearch(s, q));
+  let list = allSessions.filter(s => matchesSearch(s, q));
+
+  // Auto-hide trivial test/demo sessions in the default browse view. An active
+  // search reveals everything (searching is explicit intent to find something),
+  // and the toggle below surfaces them on demand — hidden, never dropped.
+  const hideTests = !showTests && !q;
+  const hiddenCount = hideTests ? list.filter(isTestSession).length : 0;
+  if (hideTests) list = list.filter(s => !isTestSession(s));
 
   if (!allSessions.length) {
     el.innerHTML = '<div class="empty" data-testid="sessions-empty"><h3>No sessions yet</h3><p>Start a new session to begin</p></div>';
     return;
   }
+
+  // Show a toggle when there are hidden test sessions, or when we're currently
+  // revealing them (so the user can hide them again).
+  const toggle = (hiddenCount || (showTests && !q))
+    ? `<button class="list-tests-toggle" id="btn-toggle-tests" data-testid="toggle-tests">${
+        showTests ? '▾ Hide test sessions' : `▸ Show ${hiddenCount} test session${hiddenCount === 1 ? '' : 's'}`}</button>`
+    : '';
+
   if (!list.length) {
-    el.innerHTML = `<div class="empty" data-testid="sessions-no-match"><p>No sessions match “${esc(searchQuery)}”</p></div>`;
+    el.innerHTML = (q
+      ? `<div class="empty" data-testid="sessions-no-match"><p>No sessions match “${esc(searchQuery)}”</p></div>`
+      : `<div class="empty" data-testid="sessions-all-hidden"><p>Only test sessions here — all hidden.</p></div>`)
+      + toggle;
+    wireTestsToggle();
     return;
   }
+
   el.innerHTML = list.map(s => `
     <div class="session-item" data-testid="session-item" data-id="${esc(s.id)}" role="listitem">
       <div class="session-info">
@@ -121,11 +181,17 @@ function renderSessions() {
       </div>
       ${statusBadge(s.status)}
     </div>
-  `).join('');
+  `).join('') + toggle;
   el.querySelectorAll('.session-item').forEach(item =>
     item.addEventListener('click', () => navigate(`/session/${item.dataset.id}`))
   );
+  wireTestsToggle();
   highlightActive(currentSessionId);
+}
+
+function wireTestsToggle() {
+  const b = $('btn-toggle-tests');
+  if (b) b.addEventListener('click', () => { showTests = !showTests; renderSessions(); });
 }
 
 // ─── Session detail ─────────────────────────────────────────────────────────
@@ -143,6 +209,7 @@ async function loadSession(id) {
     '<div class="loading" style="padding:24px;justify-content:center"><div class="spinner"></div> Loading…</div>';
   $('stream-area').classList.add('hidden');
   $('btn-stop').classList.add('hidden');
+  showContinue(false); // renderSession re-enables it once we know the status
   clearInterval(pollTimer);
 
   try {
@@ -185,13 +252,84 @@ function attachmentsHtml(atts) {
 function messageHtml(m) {
   return `
     <div class="message message-${esc(m.role)}" data-testid="message" data-role="${esc(m.role)}">
-      <div class="message-role">${m.role === 'user' ? 'You' : 'Claude'}</div>
+      <div class="message-head">
+        <span class="message-role">${m.role === 'user' ? 'You' : 'Claude'}</span>
+        <button class="msg-copy" type="button" data-copy="msg" data-testid="copy-message"
+                title="Copy message" aria-label="Copy message">⧉</button>
+      </div>
       <div class="message-content${m.role === 'assistant' ? ' md-content' : ''}">${
         m.role === 'assistant' ? md(m.content) : esc(m.content)
       }</div>
       ${attachmentsHtml(m.attachments)}
     </div>`;
 }
+
+// ─── Copy to clipboard ────────────────────────────────────────────────────────
+// Two affordances, one mechanism: a per-message button (copies the whole message
+// text) and a button on every fenced code block (copies the exact code). Both
+// carry data-copy and are handled by a single delegated click listener, so any
+// message rendered now or later — history, stream reload, reply — gets working
+// copy with no extra wiring. Clipboard API with an execCommand fallback for
+// non-secure contexts.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to the legacy path below */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+function flashCopied(btn) {
+  btn.classList.add('copied');
+  btn.textContent = '✓';
+  clearTimeout(btn._copyTimer);
+  btn._copyTimer = setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '⧉'; }, 1200);
+}
+
+// Add a copy button to each fenced code block under `root` (idempotent — skips
+// blocks already decorated, so it's safe to call after every re-render).
+function decorateCodeBlocks(root) {
+  root.querySelectorAll('pre').forEach(pre => {
+    if (pre.querySelector('.code-copy')) return;
+    const btn = document.createElement('button');
+    btn.className = 'code-copy';
+    btn.type = 'button';
+    btn.textContent = '⧉';
+    btn.setAttribute('data-copy', 'code');
+    btn.setAttribute('data-testid', 'copy-code');
+    btn.setAttribute('title', 'Copy code');
+    btn.setAttribute('aria-label', 'Copy code');
+    pre.appendChild(btn);
+  });
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-copy]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  let text = '';
+  if (btn.dataset.copy === 'code') {
+    const pre = btn.closest('pre');
+    const code = pre && pre.querySelector('code');
+    text = (code || pre || {}).innerText || '';
+  } else {
+    const content = btn.closest('.message')?.querySelector('.message-content');
+    text = content ? content.innerText : '';
+  }
+  if (text && await copyToClipboard(text)) flashCopied(btn);
+});
 
 function renderSession(session) {
   const { id, status, messages, lastMessage } = session;
@@ -224,12 +362,15 @@ function renderSession(session) {
   } else {
     container.innerHTML = msgs.map(messageHtml).join('');
   }
+  decorateCodeBlocks(container);
 
   if (status === 'running') {
     $('btn-stop').classList.remove('hidden');
+    showContinue(false);
     startPolling(id);
   } else {
     $('btn-stop').classList.add('hidden');
+    showContinue(!!currentSessionId);
   }
 
   scrollBottom();
@@ -290,6 +431,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
   streamEl.className = 'stream-area active';
   streamEl.innerHTML = '';
   btnStop.classList.remove('hidden');
+  showContinue(false); // a stream is active — nothing to "continue" yet
   btnSend.disabled = true;
   input.disabled = true;
 
@@ -401,6 +543,9 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     // stays visible (we never set hidden) so the error remains readable.
     streamEl.classList.remove('active');
     notice.classList.add('hidden');
+    // Stream is over (done reloads via loadSession; error stays here) — offer
+    // Continue again so the user can nudge a stalled/errored session forward.
+    showContinue(!!currentSessionId);
   }
 
   await tryConnect();
@@ -741,6 +886,16 @@ async function transcribeBlob(blob, attempt = 0) {
   }
 }
 
+// ─── Continue ─────────────────────────────────────────────────────────────────
+// One-click resume of the selected session: sends a canned "продолжай" through
+// the same reply+stream path as a typed message, so it works identically on the
+// real agent backend (which treats it as a plain instruction to keep going).
+async function continueSession() {
+  if (!currentSessionId) return;
+  const msg = 'продолжай';
+  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message: msg }, msg);
+}
+
 // ─── Stop ───────────────────────────────────────────────────────────────────
 async function stopSession() {
   if (!currentSessionId) return;
@@ -776,6 +931,7 @@ async function route() {
   currentSessionId = null;
   showConvo(false);
   highlightActive(null);
+  showContinue(false); // no session selected → nothing to continue
 }
 
 // ─── Event listeners ────────────────────────────────────────────────────────
@@ -802,6 +958,7 @@ $('search-input').addEventListener('input', e => {
   renderSessions();
 });
 
+$('btn-continue').addEventListener('click', continueSession);
 $('btn-stop').addEventListener('click', stopSession);
 
 $('btn-mic').addEventListener('click', toggleRecording);
@@ -880,4 +1037,5 @@ $('btn-theme').addEventListener('click', () => {
 });
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
+loadProfile();
 route();

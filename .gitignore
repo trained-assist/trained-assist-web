@@ -1,0 +1,9 @@
+# Dependencies — the Cloudflare Worker is bundled by wrangler at deploy time and
+# needs nothing vendored; node_modules was historically committed by mistake.
+node_modules/
+
+# Build / deploy logs — transient, never source of truth.
+*.log
+
+# Wrangler local state (includes cached account credentials — must never be in git).
+.wrangler/

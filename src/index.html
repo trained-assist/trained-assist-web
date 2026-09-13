@@ -15,7 +15,10 @@
       <!-- Left pane: compact header + search + session list -->
       <aside class="pane-list" data-testid="pane-list">
         <div class="list-header">
-          <span class="app-title">Claude Assistant</span>
+          <div class="list-brand">
+            <span class="app-title">Claude Assistant</span>
+            <span class="app-profile" id="profile-label" data-testid="profile-label" title="Signed-in profile"></span>
+          </div>
           <button class="btn btn-ghost btn-icon" id="btn-theme" data-testid="theme-toggle"
                   title="Toggle light / dark" aria-label="Toggle light / dark theme">🌙</button>
           <button class="btn btn-ghost" id="btn-logout" data-testid="logout">Logout</button>
@@ -71,6 +74,7 @@
           <div id="voice-status" class="voice-status hidden" data-testid="voice-status" role="status" aria-live="polite"></div>
           <div class="reply-buttons">
             <button class="btn btn-ghost btn-mic" id="btn-mic" data-testid="mic-record" title="Dictate (voice input)" aria-label="Record voice">🎤 Voice</button>
+            <button class="btn btn-primary hidden" id="btn-continue" data-testid="continue-session" title="Продолжить эту сессию">▷ Продолжай</button>
             <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Send</button>
           </div>
         </div>

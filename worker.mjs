@@ -258,6 +258,12 @@ export class SessionHub {
     if (p.startsWith('/web/') && !(await this.isAuthed(request))) {
       return json(401, { error: 'Unauthorized' });
     }
+    // Who am I: the profile that owns this request's token. The UI shows it in
+    // the header so the operator always knows which profile's sessions they're
+    // looking at (several profiles can share this URL behind their own password).
+    if (p === '/web/me') {
+      return json(200, { username: await this.tokenUser(request) });
+    }
     // Unified list: the profile's REAL Telegram/agent sessions (delegated) merged
     // with any local imported/demo sessions in this DO, into ONE sorted list.
     // Agent sessions are tagged origin:'agent' so /web/session/:id knows to
@@ -304,7 +310,9 @@ export class SessionHub {
     if (p === '/web/files/tree') {
       if (!agentDelegation) return json(200, { tree: [] });
       const projectsUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/projects');
-      const username = this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+      // Must be the LOGGED-IN profile's projects, not the default — otherwise every
+      // profile sees trained-assist-product-owner's folders (same fix as /web/me).
+      const username = await this.tokenUser(request);
       try {
         const r = await fetch(projectsUrl, {
           method: 'POST',
@@ -330,7 +338,9 @@ export class SessionHub {
     if (p === '/web/project-create' && m === 'POST') {
       if (!agentDelegation) return json(503, { error: 'agent unavailable' });
       const createUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/project-create');
-      const username = this.env.AGENT_USERNAME || 'trained-assist-product-owner';
+      // Create under the LOGGED-IN profile, not the default — a project made by efi
+      // must land in efi's projects/, not trained-assist-product-owner's.
+      const username = await this.tokenUser(request);
       let bodyIn = {};
       try { bodyIn = await request.json(); } catch { return json(400, { error: 'bad json' }); }
       const name = (bodyIn.name || '').trim();
