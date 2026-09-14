@@ -190,6 +190,32 @@ export class SessionHub {
     } catch { return null; }
   }
 
+  // Write-side delegation: forward a run/reply to the agent's bearer-gated
+  // /web/run-bearer or /web/reply-bearer and stream its SSE straight back to the
+  // browser. This is the write twin of agentSessions()/agentSession() (which only
+  // READ). Returns null when delegation isn't configured OR the agent responds
+  // non-200 (e.g. the endpoint isn't deployed yet) — the caller then falls back to
+  // its old behaviour, so shipping this worker BEFORE the agent redeploy is a
+  // no-op, and it auto-upgrades to real delegation the moment the agent is live.
+  async agentTaskStream(username, agentPath, payload) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return null;
+    const target = base.replace(/\/web\/verify$/, agentPath);
+    let r;
+    try {
+      r = await fetch(target, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, ...payload }),
+      });
+    } catch { return null; }
+    if (r.status !== 200 || !r.body) return null;
+    // Pass the live SSE stream through untouched (same event shape the UI already
+    // consumes: data:{type:'chunk'|'done'|'error', ...}).
+    return new Response(r.body, { headers: {
+      'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } });
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const p = url.pathname;
@@ -423,20 +449,36 @@ export class SessionHub {
       return json(200, { ok: true });
     }
     if (p === '/web/run' && m === 'POST') {
-      const b = await body(request); const s = this.newSession(b.task);
+      const b = await body(request);
+      // Delegate a brand-new session to the REAL agent so the web "New" button
+      // starts an actual agent task (streamed live), not a demo echo. Falls back to
+      // the local demo session if delegation is off or the agent is unreachable.
+      const username = await this.tokenUser(request);
+      const proxied = await this.agentTaskStream(username, '/web/run-bearer', { task: b.task || '' });
+      if (proxied) return proxied;
+      const s = this.newSession(b.task);
       if (Array.isArray(b.attachments) && b.attachments.length) s.messages[0].attachments = b.attachments;
       await this.persist(s);
       return this.streamReply(s, b.task || '');
     }
     if (p.startsWith('/web/reply/') && m === 'POST') {
-      const s = this.sessions.get(decodeURIComponent(p.split('/').pop()));
-      if (!s) return json(404, { error: 'no session' });
+      const id = decodeURIComponent(p.split('/').pop());
       const b = await body(request);
-      const um = { role: 'user', content: b.message || '' };
-      if (Array.isArray(b.attachments) && b.attachments.length) um.attachments = b.attachments;
-      s.messages.push(um);
-      await this.persist(s);
-      return this.streamReply(s, b.message || '');
+      const s = this.sessions.get(id);
+      if (s) {
+        // Local (imported / demo / web-created) session → local demo echo.
+        const um = { role: 'user', content: b.message || '' };
+        if (Array.isArray(b.attachments) && b.attachments.length) um.attachments = b.attachments;
+        s.messages.push(um);
+        await this.persist(s);
+        return this.streamReply(s, b.message || '');
+      }
+      // Not local → it's a REAL agent/Telegram session (only ever read before, so a
+      // reply 404'd and the message vanished). Delegate the write to the agent.
+      const username = await this.tokenUser(request);
+      const proxied = await this.agentTaskStream(username, '/web/reply-bearer', { id, message: b.message || '' });
+      if (proxied) return proxied;
+      return json(404, { error: 'no session' });
     }
     return json(404, { error: 'not found' });
   }
