@@ -27,6 +27,7 @@
           <input type="search" id="search-input" data-testid="search-input"
                  placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
         </div>
+        <div class="projects-panel"><strong>Проекты</strong><div id="projects-list" data-testid="projects-list"></div></div>
         <div id="sessions-list" class="list-scroll" data-testid="sessions-list" role="list"></div>
       </aside>
 
@@ -51,6 +52,7 @@
 
           <div id="messages-container" class="messages" data-testid="messages"></div>
 
+          <div id="activity-area" class="voice-status hidden" role="status" aria-live="polite" data-testid="activity"></div>
           <div id="stream-area" class="stream-area hidden" data-testid="stream" role="status" aria-live="polite"></div>
           <div id="reconnect-notice" class="reconnect-notice hidden" data-testid="reconnect-notice" role="status" aria-live="polite">Reconnecting…</div>
         </div>
@@ -116,9 +118,12 @@
         </div>
         <div id="new-project-error" class="hidden" role="alert" data-testid="new-project-error"></div>
       </div>
+      <div id="project-notice" class="voice-status hidden" role="status"></div>
       <div class="field">
         <label for="task-input">Task</label>
         <textarea id="task-input" data-testid="task-input" rows="4" placeholder="Describe what Claude should do…"></textarea>
+        <button type="button" class="btn btn-ghost btn-mic" id="btn-task-mic" data-testid="task-mic" aria-label="Диктовать задачу">🎤 Голосом</button>
+        <div id="task-voice-status" class="voice-status hidden" role="status"></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="btn-cancel-new" data-testid="cancel-new">Cancel</button>
