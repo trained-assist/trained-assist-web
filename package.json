@@ -8,6 +8,10 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test": "node test/worker-projects.mjs && node test/web-ux.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }
