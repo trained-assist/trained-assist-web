@@ -76,6 +76,9 @@ try {
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no mobile horizontal overflow');
   await page.getByTestId('session-item').click();
   await page.getByTestId('mic-record').waitFor({state:'visible'});
+  const micBox = await page.getByTestId('mic-record').boundingBox();
+  assert(micBox.y >= 0 && micBox.y + micBox.height <= 844, 'mobile microphone is inside viewport');
+  await page.screenshot({path: process.env.UX_SCREENSHOT || '/tmp/web-ux-mobile.png'});
   assert.deepEqual(errors,[]);
   console.log('PASS: projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }

@@ -541,3 +541,12 @@ input:focus, textarea:focus, select:focus {
 .reply-buttons { flex-wrap: wrap; }
 .modal { max-height: 95dvh; overflow-y: auto; }
 @media (max-width: 860px) { .pane-list { width: 100%; } .convo-title { white-space: normal; max-height: 4.5em; } }
+
+@media (max-width: 860px) {
+  body, .app-shell { height: 100dvh; }
+  .pane-actions { max-height: 50dvh; }
+  .reply-form { flex: 1; overflow-y: auto; gap: 6px; }
+  .reply-form textarea { min-height: 60px; }
+  .reply-label { display: none; }
+  .reply-buttons { position: sticky; bottom: 0; background: var(--surface); }
+}
