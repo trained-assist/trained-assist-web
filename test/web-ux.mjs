@@ -46,10 +46,13 @@ try {
   assert.match(await page.locator('#project-notice').innerText(),/создан и выбран/);
   failTree=false;
   await page.getByTestId('cancel-new').click();
-  await page.locator('#retry-projects').click();
-  await page.locator('[data-project="generic-new"]').click();
+  // Reopening the modal re-fetches the project tree (loadFolders → renderProjects),
+  // which is also how the sidebar project filter recovers from the earlier failure —
+  // there's no separate retry affordance for it.
+  await page.getByTestId('new-session').click();
   await page.waitForFunction(()=>document.querySelector('#folder-select').value==='generic-new');
   assert.equal(await page.getByTestId('folder-select').inputValue(),'generic-new');
+  assert.equal(await page.locator('#project-filter option[value="generic-new"]').count(),1,'sidebar filter picks up the new project');
   await page.getByTestId('task-mic').click();
   await page.waitForFunction(()=>document.querySelector('#btn-task-mic').textContent.includes('Stop'));
   await page.waitForTimeout(300);

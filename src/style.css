@@ -104,8 +104,9 @@ body {
   flex-direction: column;
   min-height: 0;
 }
-.list-search { padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.list-search input { padding: 8px 12px; }
+.list-search { padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; gap: 8px; }
+.list-search input { padding: 8px 12px; flex: 1; min-width: 0; }
+.list-search select { padding: 8px 10px; flex-shrink: 0; max-width: 40%; }
 .list-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 
 /* Center pane: conversation is the dominant surface, full height */
@@ -533,10 +534,8 @@ input:focus, textarea:focus, select:focus {
 
 .hidden { display: none !important; }
 
-.projects-panel { padding: 10px 12px; border-bottom: 1px solid var(--border); max-height: 25vh; overflow: auto; flex-shrink: 0; }
-.project-item { display: block; width: 100%; padding: 7px 4px; text-align: left; border: 0; background: transparent; color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
-.project-item:hover { background: var(--bg); }
 .session-summary { font-size: 13px; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 5px; }
+.session-project { font-size: 11px; color: var(--text-muted); background: var(--bg); border-radius: 4px; padding: 1px 6px; margin-top: 4px; display: inline-block; }
 .session-item > .badge { flex-shrink: 0; align-self: flex-start; }
 .reply-buttons { flex-wrap: wrap; }
 .modal { max-height: 95dvh; overflow-y: auto; }
