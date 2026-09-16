@@ -26,8 +26,10 @@
         <div class="list-search">
           <input type="search" id="search-input" data-testid="search-input"
                  placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
+          <select id="project-filter" data-testid="project-filter" aria-label="Filter by project" title="Filter by project">
+            <option value="">Все проекты</option>
+          </select>
         </div>
-        <div class="projects-panel"><strong>Проекты</strong><div id="projects-list" data-testid="projects-list"></div></div>
         <div id="sessions-list" class="list-scroll" data-testid="sessions-list" role="list"></div>
       </aside>
 

@@ -101,6 +101,8 @@ async function loadProfile() {
 // ─── Sessions list ──────────────────────────────────────────────────────────
 let allSessions = [];        // full set, cached for client-side search
 let searchQuery = '';
+let projectFilter = '';      // selected project id, '' = all projects
+let projectNames = new Map(); // projectId -> display name, for the badge on each session
 let showTests = false;       // reveal auto-hidden trivial test/demo sessions
 
 // A trivial test/demo session: the shape of a manual "does it still work?" poke,
@@ -142,6 +144,7 @@ function renderSessions() {
   const el = $('sessions-list');
   const q = searchQuery.trim().toLowerCase();
   let list = allSessions.filter(s => matchesSearch(s, q));
+  if (projectFilter) list = list.filter(s => (s.projectId || '') === projectFilter);
 
   // Auto-hide trivial test/demo sessions in the default browse view. An active
   // search reveals everything (searching is explicit intent to find something),
@@ -165,7 +168,7 @@ function renderSessions() {
   if (!list.length) {
     el.innerHTML = (q
       ? `<div class="empty" data-testid="sessions-no-match"><p>No sessions match “${esc(searchQuery)}”</p></div>`
-      : `<div class="empty" data-testid="sessions-all-hidden"><p>Only test sessions here — all hidden.</p></div>`)
+      : `<div class="empty" data-testid="sessions-all-hidden"><p>${projectFilter ? 'No sessions in this project.' : 'Only test sessions here — all hidden.'}</p></div>`)
       + toggle;
     wireTestsToggle();
     return;
@@ -177,6 +180,7 @@ function renderSessions() {
         <div class="session-path">${esc(sessionTitle(s))}</div>
         ${s.summary?.gist ? `<div class="session-summary">${esc(s.summary.gist)}</div>` : ''}
         <div class="session-meta">${timeAgo(s.lastAt || s.createdAt)}${s.messageCount ? ` · ${s.messageCount} msg` : ''}</div>
+        ${(!projectFilter && s.projectId && projectNames.get(s.projectId)) ? `<div class="session-project">${esc(projectNames.get(s.projectId))}</div>` : ''}
       </div>
       ${statusBadge(s.status)}
     </div>
@@ -662,10 +666,19 @@ async function loadFolders(selectPath) {
   }
 }
 
+// Populates the sidebar project filter (not the modal's folder-select, which
+// loadFolders owns) and the projectId → name lookup used for the per-session
+// badge. Project selection for starting a NEW session lives in the modal only —
+// this dropdown is purely a filter over the existing session list.
 function renderProjects(tree) {
-  const el = $('projects-list');
-  el.innerHTML = tree.length ? tree.map(p => `<button class="project-item" data-project="${esc(p.path)}" title="Новая сессия в этом проекте">📁 ${esc(p.name)}</button>`).join('') : '<span class="session-meta">Пока нет проектов</span>';
-  el.querySelectorAll('[data-project]').forEach(b => b.addEventListener('click', () => openNewModal(b.dataset.project)));
+  projectNames = new Map(tree.map(p => [p.path, p.name]));
+  const sel = $('project-filter');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Все проекты</option>' +
+    tree.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join('');
+  if (tree.some(p => p.path === prev)) sel.value = prev;
+  else projectFilter = '';
+  renderSessions();
 }
 
 async function loadProjects() {
@@ -674,8 +687,7 @@ async function loadProjects() {
     if (!res.ok) throw new Error('unavailable');
     renderProjects((await res.json()).tree || []);
   } catch {
-    $('projects-list').innerHTML = '<button class="project-item" id="retry-projects">Не удалось загрузить проекты. Повторить</button>';
-    $('retry-projects').addEventListener('click', loadProjects);
+    // Non-fatal: the filter just stays at "Все проекты" until a retry succeeds.
   }
 }
 
@@ -1032,6 +1044,12 @@ $('btn-back').addEventListener('click', e => {
 // Client-side keyword search over the cached session list.
 $('search-input').addEventListener('input', e => {
   searchQuery = e.target.value;
+  renderSessions();
+});
+
+// Filter the cached session list down to one project.
+$('project-filter').addEventListener('change', e => {
+  projectFilter = e.target.value;
   renderSessions();
 });
 
