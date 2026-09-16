@@ -116,6 +116,55 @@ function isTestSession(s) {
 
 }
 
+// Durable confirmations are independent of the currently selected session.
+async function loadRestartIntents() {
+  const panel = $('restart-intents');
+  if (!panel) return;
+  try {
+    const res = await api('/web/restart-intents');
+    if (!res.ok) throw new Error('Не удалось загрузить отложенные задачи');
+    const { intents } = await res.json();
+    panel.replaceChildren();
+    panel.classList.toggle('hidden', !intents.length);
+    for (const intent of intents) {
+      const row = document.createElement('div');
+      row.dataset.testid = 'restart-intent';
+      const label = document.createElement('p');
+      label.textContent = `${intent.title} — ожидает подтверждения`;
+      row.append(label);
+      for (const [action, text] of [['confirm', '▶️ Запустить'], ['cancel', 'Отменить']]) {
+        const button = document.createElement('button');
+        button.className = 'btn'; button.textContent = text;
+        button.dataset.testid = `restart-${action}`;
+        button.addEventListener('click', async () => {
+          const buttons = [...row.querySelectorAll('button')];
+          buttons.forEach(b => { b.disabled = true; });
+          try {
+            const response = await api('/web/restart-intents', { method: 'POST',
+              body: JSON.stringify({ handle: intent.handle, action }) });
+            if (!response.ok) throw new Error('Не удалось сохранить решение. Повторите позже.');
+            const result = await response.json();
+            if (!result.decision) throw new Error('Подтверждение устарело. Обновите страницу.');
+            label.setAttribute('role', 'status');
+            label.textContent = `${intent.title} — ${result.decision === 'cancel' ? 'отменена' : 'подтверждена, ожидает запуска'}`;
+            buttons.forEach(b => b.remove());
+          } catch (error) {
+            label.setAttribute('role', 'alert'); label.textContent = error.message;
+            buttons.forEach(b => { b.disabled = false; });
+          }
+        });
+        row.append(button);
+      }
+      panel.append(row);
+    }
+  } catch (error) {
+    if (error.message !== 'Unauthorized') {
+      panel.classList.remove('hidden'); panel.textContent = 'Не удалось загрузить отложенные задачи. Обновите страницу.';
+      panel.setAttribute('role', 'alert');
+    }
+  }
+}
+
 async function loadSessions() {
   if (!allSessions.length) {
     $('sessions-list').innerHTML =
@@ -126,6 +175,7 @@ async function loadSessions() {
     const sessions = await res.json();
     allSessions = Array.isArray(sessions) ? sessions : [];
     renderSessions();
+    await loadRestartIntents();
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       $('sessions-list').innerHTML =

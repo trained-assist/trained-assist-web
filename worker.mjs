@@ -287,6 +287,25 @@ export class SessionHub {
     // Who am I: the profile that owns this request's token. The UI shows it in
     // the header so the operator always knows which profile's sessions they're
     // looking at (several profiles can share this URL behind their own password).
+    if (p === '/web/restart-intents') {
+      if (!['GET', 'POST'].includes(request.method)) return json(405, { error: 'Method not allowed' });
+      if (!agentDelegation) return json(503, { error: 'Confirmation service unavailable' });
+      const input = request.method === 'POST' ? await body(request) : {};
+      // Identity comes only from our stored authenticated token. Never forward
+      // browser-supplied username/owner/project/payload or confirmation time.
+      const payload = { username: await this.tokenUser(request),
+        action: request.method === 'GET' ? 'list' : input.action,
+        ...(request.method === 'POST' ? { handle: input.handle } : {}) };
+      if (request.method === 'POST' && !['confirm', 'cancel'].includes(payload.action)) return json(400, { error: 'Invalid decision' });
+      try {
+        const response = await fetch(AGENT_VERIFY.replace(/\/web\/verify$/, '/web/restart-intents-bearer'), {
+          method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.env.AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify(payload), signal: AbortSignal.timeout(8000),
+        });
+        const result = await response.json();
+        return json(response.status, result, { 'cache-control': 'no-store' });
+      } catch { return json(503, { error: 'Confirmation service unavailable' }); }
+    }
     if (p === '/web/me') {
       return json(200, { username: await this.tokenUser(request) });
     }

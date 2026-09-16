@@ -549,3 +549,7 @@ input:focus, textarea:focus, select:focus {
   .reply-label { display: none; }
   .reply-buttons { position: sticky; bottom: 0; background: var(--surface); }
 }
+
+#restart-intents { padding: 12px; max-height: 35vh; overflow-y: auto; border-bottom: 1px solid var(--border); }
+#restart-intents p { margin: 8px 0; overflow-wrap: anywhere; }
+#restart-intents button { margin: 0 6px 8px 0; }
