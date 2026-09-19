@@ -37,6 +37,9 @@ jobs:
       - run: npm run test:staging
 
   auto-merge:
+    permissions:
+      contents: write
+      pull-requests: write
     needs: [check, staging-gate]
     if: success() && github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
