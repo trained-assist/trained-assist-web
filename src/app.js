@@ -44,10 +44,14 @@ function timeAgo(dateStr) {
 function statusBadge(status) {
   const map = {
     running:   '<span class="badge badge-running">⟳ Running</span>',
-    completed: '<span class="badge badge-completed">✓ Done</span>',
+    completed: '<span class="badge badge-completed" title="Завершена" aria-label="Завершена">✓</span>',
     failed:    '<span class="badge badge-failed">✕ Failed</span>',
   };
   return map[status] || (status ? `<span class="badge">${esc(status)}</span>` : '');
+}
+
+function sessionTitle(s) {
+  return s.summary?.title || s.title || s.topic || s.lastUserMessage || s.id;
 }
 
 function md(text) {
@@ -97,6 +101,8 @@ async function loadProfile() {
 // ─── Sessions list ──────────────────────────────────────────────────────────
 let allSessions = [];        // full set, cached for client-side search
 let searchQuery = '';
+let projectFilter = '';      // selected project id, '' = all projects
+let projectNames = new Map(); // projectId -> display name, for the badge on each session
 let showTests = false;       // reveal auto-hidden trivial test/demo sessions
 
 // A trivial test/demo session: the shape of a manual "does it still work?" poke,
@@ -106,14 +112,57 @@ let showTests = false;       // reveal auto-hidden trivial test/demo sessions
 // any active search bring them back (see renderSessions).
 function isTestSession(s) {
   if (/^(s-00[12]$|ui-test-|chaos-|test-|demo-)/.test(s.id || '')) return true;
-  const n = s.messageCount;
-  if (n != null && n <= 2) {
-    const longest = Math.max(
-      (s.title || '').length, (s.topic || '').length,
-      (s.lastUserMessage || '').length, (s.lastMessage || '').length);
-    if (longest <= 40) return true;
-  }
   return false;
+
+}
+
+// Durable confirmations are independent of the currently selected session.
+async function loadRestartIntents() {
+  const panel = $('restart-intents');
+  if (!panel) return;
+  try {
+    const res = await api('/web/restart-intents');
+    if (!res.ok) throw new Error('Не удалось загрузить отложенные задачи');
+    const { intents } = await res.json();
+    panel.replaceChildren();
+    panel.classList.toggle('hidden', !intents.length);
+    for (const intent of intents) {
+      const row = document.createElement('div');
+      row.dataset.testid = 'restart-intent';
+      const label = document.createElement('p');
+      label.textContent = `${intent.title} — ожидает подтверждения`;
+      row.append(label);
+      for (const [action, text] of [['confirm', '▶️ Запустить'], ['cancel', 'Отменить']]) {
+        const button = document.createElement('button');
+        button.className = 'btn'; button.textContent = text;
+        button.dataset.testid = `restart-${action}`;
+        button.addEventListener('click', async () => {
+          const buttons = [...row.querySelectorAll('button')];
+          buttons.forEach(b => { b.disabled = true; });
+          try {
+            const response = await api('/web/restart-intents', { method: 'POST',
+              body: JSON.stringify({ handle: intent.handle, action }) });
+            if (!response.ok) throw new Error('Не удалось сохранить решение. Повторите позже.');
+            const result = await response.json();
+            if (!result.decision) throw new Error('Подтверждение устарело. Обновите страницу.');
+            label.setAttribute('role', 'status');
+            label.textContent = `${intent.title} — ${result.decision === 'cancel' ? 'отменена' : 'подтверждена, ожидает запуска'}`;
+            buttons.forEach(b => b.remove());
+          } catch (error) {
+            label.setAttribute('role', 'alert'); label.textContent = error.message;
+            buttons.forEach(b => { b.disabled = false; });
+          }
+        });
+        row.append(button);
+      }
+      panel.append(row);
+    }
+  } catch (error) {
+    if (error.message !== 'Unauthorized') {
+      panel.classList.remove('hidden'); panel.textContent = 'Не удалось загрузить отложенные задачи. Обновите страницу.';
+      panel.setAttribute('role', 'alert');
+    }
+  }
 }
 
 async function loadSessions() {
@@ -126,6 +175,7 @@ async function loadSessions() {
     const sessions = await res.json();
     allSessions = Array.isArray(sessions) ? sessions : [];
     renderSessions();
+    await loadRestartIntents();
   } catch (err) {
     if (err.message !== 'Unauthorized') {
       $('sessions-list').innerHTML =
@@ -136,7 +186,7 @@ async function loadSessions() {
 
 function matchesSearch(s, q) {
   if (!q) return true;
-  const hay = `${s.topic || ''} ${s.title || ''} ${s.lastUserMessage || ''} ${s.lastMessage || ''} ${s.id}`.toLowerCase();
+  const hay = `${s.summary?.title || ''} ${s.summary?.gist || ''} ${s.topic || ''} ${s.title || ''} ${s.lastUserMessage || ''} ${s.lastMessage || ''} ${s.id}`.toLowerCase();
   return hay.includes(q);
 }
 
@@ -144,6 +194,7 @@ function renderSessions() {
   const el = $('sessions-list');
   const q = searchQuery.trim().toLowerCase();
   let list = allSessions.filter(s => matchesSearch(s, q));
+  if (projectFilter) list = list.filter(s => (s.projectId || '') === projectFilter);
 
   // Auto-hide trivial test/demo sessions in the default browse view. An active
   // search reveals everything (searching is explicit intent to find something),
@@ -167,7 +218,7 @@ function renderSessions() {
   if (!list.length) {
     el.innerHTML = (q
       ? `<div class="empty" data-testid="sessions-no-match"><p>No sessions match “${esc(searchQuery)}”</p></div>`
-      : `<div class="empty" data-testid="sessions-all-hidden"><p>Only test sessions here — all hidden.</p></div>`)
+      : `<div class="empty" data-testid="sessions-all-hidden"><p>${projectFilter ? 'No sessions in this project.' : 'Only test sessions here — all hidden.'}</p></div>`)
       + toggle;
     wireTestsToggle();
     return;
@@ -176,8 +227,10 @@ function renderSessions() {
   el.innerHTML = list.map(s => `
     <div class="session-item" data-testid="session-item" data-id="${esc(s.id)}" role="listitem">
       <div class="session-info">
-        <div class="session-path">${esc(s.topic || s.lastUserMessage || s.id)}</div>
+        <div class="session-path">${esc(sessionTitle(s))}</div>
+        ${s.summary?.gist ? `<div class="session-summary">${esc(s.summary.gist)}</div>` : ''}
         <div class="session-meta">${timeAgo(s.lastAt || s.createdAt)}${s.messageCount ? ` · ${s.messageCount} msg` : ''}</div>
+        ${(!projectFilter && s.projectId && projectNames.get(s.projectId)) ? `<div class="session-project">${esc(projectNames.get(s.projectId))}</div>` : ''}
       </div>
       ${statusBadge(s.status)}
     </div>
@@ -208,6 +261,7 @@ async function loadSession(id) {
   $('messages-container').innerHTML =
     '<div class="loading" style="padding:24px;justify-content:center"><div class="spinner"></div> Loading…</div>';
   $('stream-area').classList.add('hidden');
+  $('activity-area').classList.add('hidden');
   $('btn-stop').classList.add('hidden');
   showContinue(false); // renderSession re-enables it once we know the status
   clearInterval(pollTimer);
@@ -333,7 +387,7 @@ document.addEventListener('click', async (e) => {
 
 function renderSession(session) {
   const { id, status, messages, lastMessage } = session;
-  $('session-title').textContent = session.topic || session.path || id;
+  $('session-title').textContent = sessionTitle(session) || session.path || id;
   $('session-status').innerHTML = statusBadge(status);
 
   const msgs = Array.isArray(messages) && messages.length
@@ -387,20 +441,25 @@ function startPolling(sessionId) {
   streamEl.classList.remove('hidden');
   streamEl.innerHTML = '<div class="loading"><div class="spinner"></div> Waiting for output…</div>';
 
+  clearInterval(pollTimer);
+  const started = Date.now();
   pollTimer = setInterval(async () => {
     if (currentSessionId !== sessionId) { clearInterval(pollTimer); return; }
     try {
       const res = await api(`/web/session/${sessionId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const session = await res.json();
+      if (currentSessionId !== sessionId) return;
       if (session.status !== 'running') {
         clearInterval(pollTimer);
         renderSession(session);
         streamEl.classList.add('hidden');
-      } else if (session.lastMessage) {
-        streamEl.innerHTML = `<div class="md-content">${md(session.lastMessage)}</div>`;
-        scrollBottom();
+      } else {
+        streamEl.innerHTML = `<div class="loading"><div class="spinner"></div>Агент работает · проверено ${new Date().toLocaleTimeString()} · ожидание ${Math.floor((Date.now() - started) / 1000)} с</div>`;
       }
-    } catch {}
+    } catch {
+      if (currentSessionId === sessionId) streamEl.textContent = 'Не удалось проверить состояние. Повторяю…';
+    }
   }, 2500);
 }
 
@@ -408,7 +467,8 @@ function startPolling(sessionId) {
 async function startStream(endpoint, body, appendUserMsg = null, appendAtts = null) {
   clearInterval(pollTimer);
   if (streamAbort) streamAbort.abort();
-  streamAbort = new AbortController();
+  const controller = new AbortController();
+  streamAbort = controller;
 
   const streamEl = $('stream-area');
   const btnStop  = $('btn-stop');
@@ -429,13 +489,26 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
 
   streamEl.classList.remove('hidden');
   streamEl.className = 'stream-area active';
-  streamEl.innerHTML = '';
+  streamEl.innerHTML = '<div class="loading"><div class="spinner"></div>Отправляю задачу…</div>';
   btnStop.classList.remove('hidden');
   showContinue(false); // a stream is active — nothing to "continue" yet
   btnSend.disabled = true;
   input.disabled = true;
 
   let buffer = '';
+  const startedAt = Date.now();
+  let lastSignal = 0;
+  let activityText = '';
+  const activityTimer = setInterval(() => {
+    if (controller.signal.aborted) return;
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const quiet = lastSignal ? Math.floor((Date.now() - lastSignal) / 1000) : elapsed;
+    const state = quiet > 45 ? 'Нет обновлений от сервера — проверяю соединение' : lastSignal ? 'Соединение открыто. Ожидаю ответ агента' : 'Подключаюсь к агенту';
+    const activity = $('activity-area');
+    activity.classList.remove('hidden');
+    activity.innerHTML = `<div class="loading"><div class="spinner"></div>${esc(quiet > 45 ? state : activityText || state)} · ${elapsed} с</div>`;
+    if (!buffer) streamEl.innerHTML = '';
+  }, 1000);
 
   const tryConnect = async (attempt = 0) => {
     if (attempt > 0) {
@@ -448,13 +521,13 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
       buffer = '';
       streamEl.innerHTML = '';
       await new Promise(r => setTimeout(r, 3000));
-      if (streamAbort.signal.aborted) return;
+      if (controller.signal.aborted) return;
     }
 
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
-        signal: streamAbort.signal,
+        signal: controller.signal,
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
@@ -477,7 +550,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
       let sseBuffer = '';
 
       while (true) {
-        if (streamAbort.signal.aborted) break;
+        if (controller.signal.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -488,14 +561,19 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const raw = line.slice(6).trim();
-          if (raw === '{}') continue; // ping
+          lastSignal = Date.now();
+          if (raw === '{}') continue; // heartbeat confirms connection, not model progress
           try {
             const msg = JSON.parse(raw);
-            if (msg.type === 'chunk' && msg.text) {
+            if (msg.type === 'progress' || msg.type === 'status') {
+              activityText = msg.message || msg.text || '';
+            } else if (msg.type === 'chunk' && msg.text) {
               buffer += msg.text;
               streamEl.innerHTML = `<div class="md-content">${md(buffer)}</div>`;
               scrollBottom();
             } else if (msg.type === 'done') {
+              clearInterval(activityTimer);
+              $('activity-area').classList.add('hidden');
               const sid = msg.sessionId || currentSessionId;
               if (sid) {
                 currentSessionId = sid;
@@ -516,13 +594,13 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
       }
 
       // Stream ended without done event — try reconnect
-      if (!streamAbort.signal.aborted && attempt < 3) {
+      if (!controller.signal.aborted && attempt < 3) {
         await tryConnect(attempt + 1);
       } else {
         finalise();
       }
     } catch (err) {
-      if (streamAbort.signal.aborted || err.name === 'AbortError') { finalise(); return; }
+      if (controller.signal.aborted || err.name === 'AbortError') { finalise(); return; }
       if (attempt < 3) {
         await tryConnect(attempt + 1);
       } else {
@@ -533,6 +611,9 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
   };
 
   function finalise() {
+    clearInterval(activityTimer);
+    if (streamAbort !== controller) return;
+    $('activity-area').classList.add('hidden');
     btnStop.classList.add('hidden');
     btnSend.disabled = false;
     input.disabled = false;
@@ -594,15 +675,16 @@ async function importFiles(fileList) {
 }
 
 // ─── New session modal ──────────────────────────────────────────────────────
-async function openNewModal() {
+async function openNewModal(selectPath) {
   const modal = $('modal-new');
   $('task-input').value = '';
   // Reset the inline new-project form each time the modal opens.
   $('new-project-form').classList.add('hidden');
   $('new-project-name').value = '';
   $('new-project-error').classList.add('hidden');
+  $('project-notice').classList.add('hidden');
   modal.classList.remove('hidden');
-  await loadFolders();
+  await loadFolders(typeof selectPath === 'string' ? selectPath : undefined);
 }
 
 // Populate the project-folder select from the agent's project list. `selectPath`
@@ -610,12 +692,15 @@ async function openNewModal() {
 // openNewModal so create-project can refresh the list without reopening.
 async function loadFolders(selectPath) {
   const sel = $('folder-select');
+  selectPath ||= sel.value;
   sel.innerHTML = '<option value="">Loading folders…</option>';
   sel.disabled  = true;
   try {
     const res  = await api('/web/files/tree');
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Project list unavailable');
     const tree = data.tree || [];
+    renderProjects(tree);
     if (!tree.length) {
       sel.innerHTML = '<option value="">No folders available</option>';
     } else {
@@ -624,8 +709,35 @@ async function loadFolders(selectPath) {
       sel.disabled = false;
       if (selectPath) sel.value = selectPath;
     }
+    return true;
   } catch {
     sel.innerHTML = '<option value="">Failed to load folders</option>';
+    return false;
+  }
+}
+
+// Populates the sidebar project filter (not the modal's folder-select, which
+// loadFolders owns) and the projectId → name lookup used for the per-session
+// badge. Project selection for starting a NEW session lives in the modal only —
+// this dropdown is purely a filter over the existing session list.
+function renderProjects(tree) {
+  projectNames = new Map(tree.map(p => [p.path, p.name]));
+  const sel = $('project-filter');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Все проекты</option>' +
+    tree.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join('');
+  if (tree.some(p => p.path === prev)) sel.value = prev;
+  else projectFilter = '';
+  renderSessions();
+}
+
+async function loadProjects() {
+  try {
+    const res = await api('/web/files/tree');
+    if (!res.ok) throw new Error('unavailable');
+    renderProjects((await res.json()).tree || []);
+  } catch {
+    // Non-fatal: the filter just stays at "Все проекты" until a retry succeeds.
   }
 }
 
@@ -649,7 +761,17 @@ async function createProject() {
     });
     const data = await res.json();
     if (!res.ok || !data.project) throw new Error(data.error || `HTTP ${res.status}`);
-    await loadFolders(data.project.id);
+    const loaded = await loadFolders(data.project.id);
+    const sel = $('folder-select');
+    if (!loaded || sel.value !== data.project.id) {
+      sel.add(new Option(data.project.name, data.project.id));
+      sel.disabled = false;
+      sel.value = data.project.id;
+    }
+    const notice = $('project-notice');
+    notice.textContent = `Проект «${data.project.name}» создан и выбран. ${loaded ? '' : 'Список временно недоступен.'}`;
+    notice.classList.remove('hidden');
+    await loadProjects();
     $('new-project-form').classList.add('hidden');
     nameEl.value = '';
   } catch (err) {
@@ -662,6 +784,7 @@ async function createProject() {
 }
 
 async function submitNewSession() {
+  if (voiceBusy) { setVoiceStatus('Остановите запись и дождитесь расшифровки', 'busy'); return; }
   const path    = $('folder-select').value;
   const message = $('task-input').value.trim();
   const btn     = $('btn-start-new');
@@ -775,6 +898,7 @@ async function uploadPending() {
 
 // ─── Reply ──────────────────────────────────────────────────────────────────
 async function sendReply() {
+  if (voiceBusy) { setVoiceStatus('Остановите запись и дождитесь расшифровки', 'busy'); return; }
   const input   = $('reply-input');
   const message = input.value.trim();
   if ((!message && !pendingAttachments.length) || !currentSessionId) return;
@@ -808,9 +932,12 @@ async function sendReply() {
 let mediaRecorder = null;
 let recordChunks = [];
 let recording = false;
+let voiceTarget = 'reply-input';
+let voiceBusy = false;
+const voiceButton = () => $(voiceTarget === 'task-input' ? 'btn-task-mic' : 'btn-mic');
 
 function setVoiceStatus(text, kind = '') {
-  const el = $('voice-status');
+  const el = $(voiceTarget === 'task-input' ? 'task-voice-status' : 'voice-status');
   if (!text) { el.classList.add('hidden'); el.textContent = ''; el.removeAttribute('role'); return; }
   el.classList.remove('hidden');
   el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
@@ -818,20 +945,25 @@ function setVoiceStatus(text, kind = '') {
   el.textContent = text;
 }
 
-async function toggleRecording() {
-  const btn = $('btn-mic');
+async function toggleRecording(target = 'reply-input') {
   if (recording) { stopRecording(); return; }
+  if (voiceBusy) return;
+  voiceTarget = target;
+  const btn = voiceButton();
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     setVoiceStatus('Voice input not supported in this browser', 'error');
     return;
   }
+  voiceBusy = true;
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
+    voiceBusy = false;
     setVoiceStatus('Microphone access denied', 'error');
     return;
   }
+  try {
   recordChunks = [];
   const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
   mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -839,26 +971,31 @@ async function toggleRecording() {
   mediaRecorder.addEventListener('stop', async () => {
     stream.getTracks().forEach(t => t.stop());
     const blob = new Blob(recordChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-    await transcribeBlob(blob);
+    try { await transcribeBlob(blob); } finally { voiceBusy = false; }
   });
   mediaRecorder.start();
   recording = true;
   btn.classList.add('recording');
   btn.textContent = '⏹ Stop';
-  btn.setAttribute('data-testid', 'mic-record');
   setVoiceStatus('● Recording… click Stop when done', 'recording');
+  } catch {
+    stream.getTracks().forEach(t => t.stop());
+    voiceBusy = false;
+    recording = false;
+    setVoiceStatus('Не удалось начать запись. Попробуйте ещё раз.', 'error');
+  }
 }
 
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   recording = false;
-  const btn = $('btn-mic');
+  const btn = voiceButton();
   btn.classList.remove('recording');
   btn.textContent = '🎤 Voice';
 }
 
 async function transcribeBlob(blob, attempt = 0) {
-  const input = $('reply-input');
+  const input = $(voiceTarget);
   setVoiceStatus(attempt ? `Transcribing… (retry ${attempt})` : 'Transcribing…', 'busy');
   try {
     const res = await api('/web/transcribe', {
@@ -880,7 +1017,7 @@ async function transcribeBlob(blob, attempt = 0) {
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     setVoiceStatus('✓ Transcribed — review & Send', 'ok');
-    setTimeout(() => setVoiceStatus(''), 3000);
+
   } catch (err) {
     if (err.message !== 'Unauthorized') setVoiceStatus(`Transcription failed: ${err.message}`, 'error');
   }
@@ -912,15 +1049,17 @@ async function stopSession() {
 // ─── Router ─────────────────────────────────────────────────────────────────
 function navigate(path, pushState = true) {
   if (pushState) location.hash = path;
+  else history.replaceState(null, '', `#${path}`);
 }
 
 async function route() {
   if (!requireAuth()) return;
   clearInterval(pollTimer);
+  $('activity-area').classList.add('hidden');
   if (streamAbort) { streamAbort.abort(); streamAbort = null; }
 
   // The list pane is always visible — keep it fresh on every route.
-  await loadSessions();
+  await Promise.all([loadSessions(), loadProjects()]);
 
   const hash = location.hash.slice(1); // strip '#'
   if (hash.startsWith('/session/')) {
@@ -958,10 +1097,17 @@ $('search-input').addEventListener('input', e => {
   renderSessions();
 });
 
+// Filter the cached session list down to one project.
+$('project-filter').addEventListener('change', e => {
+  projectFilter = e.target.value;
+  renderSessions();
+});
+
 $('btn-continue').addEventListener('click', continueSession);
 $('btn-stop').addEventListener('click', stopSession);
 
-$('btn-mic').addEventListener('click', toggleRecording);
+$('btn-mic').addEventListener('click', () => toggleRecording('reply-input'));
+$('btn-task-mic').addEventListener('click', () => toggleRecording('task-input'));
 
 $('btn-send').addEventListener('click', sendReply);
 $('reply-input').addEventListener('keydown', e => {
@@ -998,7 +1144,11 @@ $('reply-input').addEventListener('paste', e => {
   if (files && files.length) { e.preventDefault(); addFiles(files); }
 });
 
-$('btn-cancel-new').addEventListener('click', () => $('modal-new').classList.add('hidden'));
+function closeNewModal() {
+  if (voiceBusy && voiceTarget === 'task-input') { if (recording) stopRecording(); return; }
+  $('modal-new').classList.add('hidden');
+}
+$('btn-cancel-new').addEventListener('click', closeNewModal);
 $('btn-start-new').addEventListener('click', submitNewSession);
 $('btn-new-project').addEventListener('click', () => {
   const form = $('new-project-form');
@@ -1010,7 +1160,7 @@ $('new-project-name').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); createProject(); }
 });
 $('modal-new').addEventListener('click', e => {
-  if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+  if (e.target === e.currentTarget) closeNewModal();
 });
 
 window.addEventListener('hashchange', route);

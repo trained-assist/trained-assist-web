@@ -287,6 +287,25 @@ export class SessionHub {
     // Who am I: the profile that owns this request's token. The UI shows it in
     // the header so the operator always knows which profile's sessions they're
     // looking at (several profiles can share this URL behind their own password).
+    if (p === '/web/restart-intents') {
+      if (!['GET', 'POST'].includes(request.method)) return json(405, { error: 'Method not allowed' });
+      if (!agentDelegation) return json(503, { error: 'Confirmation service unavailable' });
+      const input = request.method === 'POST' ? await body(request) : {};
+      // Identity comes only from our stored authenticated token. Never forward
+      // browser-supplied username/owner/project/payload or confirmation time.
+      const payload = { username: await this.tokenUser(request),
+        action: request.method === 'GET' ? 'list' : input.action,
+        ...(request.method === 'POST' ? { handle: input.handle } : {}) };
+      if (request.method === 'POST' && !['confirm', 'cancel'].includes(payload.action)) return json(400, { error: 'Invalid decision' });
+      try {
+        const response = await fetch(AGENT_VERIFY.replace(/\/web\/verify$/, '/web/restart-intents-bearer'), {
+          method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.env.AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify(payload), signal: AbortSignal.timeout(8000),
+        });
+        const result = await response.json();
+        return json(response.status, result, { 'cache-control': 'no-store' });
+      } catch { return json(503, { error: 'Confirmation service unavailable' }); }
+    }
     if (p === '/web/me') {
       return json(200, { username: await this.tokenUser(request) });
     }
@@ -300,7 +319,9 @@ export class SessionHub {
       const username = await this.tokenUser(request);
       const remote = (await this.agentSessions(username)).map((s) => ({
         id: s.id,
-        title: (s.topic || s.lastUserMessage || s.id || '').slice(0, 60),
+        title: s.summary?.title || s.title || s.topic || s.lastUserMessage || s.id,
+        summary: s.summary || null,
+        projectId: s.projectId || null,
         topic: s.topic,
         status: s.status,
         lastMessage: '',
@@ -334,7 +355,7 @@ export class SessionHub {
     // linear list — no tree. Falls back to [] (picker shows "No folders") if the
     // agent is unreachable or the profile hasn't opted into projects yet.
     if (p === '/web/files/tree') {
-      if (!agentDelegation) return json(200, { tree: [] });
+      if (!agentDelegation) return json(503, { error: 'Project service unavailable' });
       const projectsUrl = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/projects');
       // Must be the LOGGED-IN profile's projects, not the default — otherwise every
       // profile sees trained-assist-product-owner's folders (same fix as /web/me).
@@ -345,7 +366,7 @@ export class SessionHub {
           headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
           body: JSON.stringify({ username }),
         });
-        if (r.status !== 200) return json(200, { tree: [] });
+        if (r.status !== 200) return json(502, { error: 'Unable to load projects' });
         const data = await r.json();
         const tree = (data.projects || []).map(pr => ({
           path: pr.id,
@@ -353,7 +374,7 @@ export class SessionHub {
         }));
         return json(200, { tree });
       } catch {
-        return json(200, { tree: [] });
+        return json(502, { error: 'Unable to load projects' });
       }
     }
     // Create a project. Delegates to the agent's /web/project-create (single source
