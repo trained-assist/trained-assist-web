@@ -251,13 +251,52 @@ function wireTestsToggle() {
 let currentSessionId = null;
 let streamAbort = null;
 let pollTimer = null;
+let streaming = false; // true whenever a run/reply request is in flight
+
+// Drafts belong to a destination; switching views never sends or discards them.
+const composerDrafts = new Map();
+let draftDestination = null;
+let sessionRunning = false;
+let dispatching = false;
+let projectsReady = false;
+function rememberDraft() {
+  if (!draftDestination) return;
+  composerDrafts.set(draftDestination, {
+    message: $('reply-input').value, attachments: pendingAttachments.slice(),
+    project: $('folder-select').value,
+  });
+}
+function openDraft(destination) {
+  if (destination === draftDestination) return;
+  rememberDraft();
+  draftDestination = destination;
+  const draft = composerDrafts.get(destination);
+  $('reply-input').value = draft?.message || '';
+  pendingAttachments = draft?.attachments?.slice() || [];
+  renderAttachments();
+  setAttachHint('');
+}
+function updateSendLabel() {
+  const busy = streaming || sessionRunning || dispatching;
+  $('composer-label').textContent = composingNew ? 'Новая задача' : 'Ответ в сессию';
+  $('btn-send').textContent = busy ? 'Выполняется…' : composingNew ? 'Начать' : 'Отправить';
+  $('btn-send').disabled = busy || (!currentSessionId && !composingNew) || (composingNew && !projectsReady);
+  const notice = $('composer-notice');
+  notice.textContent = busy ? 'Можно подготовить следующий ответ. Отправка станет доступна после завершения.' : '';
+  notice.classList.toggle('hidden', !busy);
+}
 
 async function loadSession(id) {
+  openDraft(id);
+  sessionRunning = false;
+  composingNew = false;
+  $('new-session-project').classList.add('hidden');
   currentSessionId = id;
   showConvo(true);
   highlightActive(id);
   $('session-title').textContent = id;
   $('session-status').innerHTML = '';
+  $('session-project-badge').classList.add('hidden');
   $('messages-container').innerHTML =
     '<div class="loading" style="padding:24px;justify-content:center"><div class="spinner"></div> Loading…</div>';
   $('stream-area').classList.add('hidden');
@@ -270,6 +309,7 @@ async function loadSession(id) {
     const res = await api(`/web/session/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const session = await res.json();
+    if (currentSessionId !== id) return;
     renderSession(session);
   } catch (err) {
     if (err.message !== 'Unauthorized') {
@@ -386,9 +426,17 @@ document.addEventListener('click', async (e) => {
 });
 
 function renderSession(session) {
+  sessionRunning = session.status === 'running';
+  updateSendLabel();
   const { id, status, messages, lastMessage } = session;
   $('session-title').textContent = sessionTitle(session) || session.path || id;
   $('session-status').innerHTML = statusBadge(status);
+  const badge = $('session-project-badge');
+  const projectName = session.projectId ? projectNames.get(session.projectId) : null;
+  if (projectName) { badge.textContent = `📁 ${projectName}`; badge.classList.remove('hidden'); }
+  else badge.classList.add('hidden');
+  $('composer-project').textContent = projectName || session.projectId || 'Без проекта';
+  $('composer-project').classList.remove('hidden');
 
   const msgs = Array.isArray(messages) && messages.length
     ? messages
@@ -472,9 +520,10 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
 
   const streamEl = $('stream-area');
   const btnStop  = $('btn-stop');
-  const btnSend  = $('btn-send');
-  const input    = $('reply-input');
   const notice   = $('reconnect-notice');
+
+  streaming = true;
+  updateSendLabel();
 
   if (appendUserMsg || (appendAtts && appendAtts.length)) {
     const c = $('messages-container');
@@ -492,10 +541,9 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
   streamEl.innerHTML = '<div class="loading"><div class="spinner"></div>Отправляю задачу…</div>';
   btnStop.classList.remove('hidden');
   showContinue(false); // a stream is active — nothing to "continue" yet
-  btnSend.disabled = true;
-  input.disabled = true;
 
   let buffer = '';
+  let delivered = false;
   const startedAt = Date.now();
   let lastSignal = 0;
   let activityText = '';
@@ -510,20 +558,9 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     if (!buffer) streamEl.innerHTML = '';
   }, 1000);
 
-  const tryConnect = async (attempt = 0) => {
-    if (attempt > 0) {
-      notice.classList.remove('hidden');
-      notice.textContent = `Reconnecting… (attempt ${attempt})`;
-      // The backend replays the stream from the start on every reconnect (we
-      // re-POST the same body), so drop whatever partial text we buffered on the
-      // dropped attempt — otherwise the replay concatenates and the preview shows
-      // duplicated/garbled output ("Working onWorking on it…").
-      buffer = '';
-      streamEl.innerHTML = '';
-      await new Promise(r => setTimeout(r, 3000));
-      if (controller.signal.aborted) return;
-    }
-
+  // A dropped POST is ambiguous: reconnect must eventually use a read-only
+  // resume token. Never repeat a mutation to recover a display stream.
+  const tryConnect = async () => {
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -552,7 +589,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
       while (true) {
         if (controller.signal.aborted) break;
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || controller.signal.aborted || streamAbort !== controller) break;
 
         sseBuffer += decoder.decode(value, { stream: true });
         const lines = sseBuffer.split('\n');
@@ -572,10 +609,17 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
               streamEl.innerHTML = `<div class="md-content">${md(buffer)}</div>`;
               scrollBottom();
             } else if (msg.type === 'done') {
+              delivered = true;
               clearInterval(activityTimer);
               $('activity-area').classList.add('hidden');
               const sid = msg.sessionId || currentSessionId;
               if (sid) {
+                if (draftDestination === 'new') {
+                  rememberDraft();
+                  composerDrafts.set(sid, composerDrafts.get('new'));
+                  composerDrafts.delete('new');
+                  draftDestination = null;
+                }
                 currentSessionId = sid;
                 navigate(`/session/${sid}`, false); // reflect real id in the URL
                 await loadSession(sid);
@@ -593,30 +637,21 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
         }
       }
 
-      // Stream ended without done event — try reconnect
-      if (!controller.signal.aborted && attempt < 3) {
-        await tryConnect(attempt + 1);
-      } else {
-        finalise();
-      }
+      if (!controller.signal.aborted) throw new Error('Поток закрыт без подтверждения выполнения');
     } catch (err) {
-      if (controller.signal.aborted || err.name === 'AbortError') { finalise(); return; }
-      if (attempt < 3) {
-        await tryConnect(attempt + 1);
-      } else {
-        streamEl.innerHTML = `<div class="err" data-testid="stream-error" role="alert">Connection failed: ${esc(err.message)}</div>`;
-        finalise();
-      }
+      if (controller.signal.aborted || err.name === 'AbortError') return;
+      streamEl.innerHTML = `<div class="err" data-testid="stream-error" role="alert">${esc(err.message)}</div>`;
     }
+
   };
 
   function finalise() {
     clearInterval(activityTimer);
     if (streamAbort !== controller) return;
     $('activity-area').classList.add('hidden');
-    btnStop.classList.add('hidden');
-    btnSend.disabled = false;
-    input.disabled = false;
+    btnStop.classList.toggle('hidden', !sessionRunning);
+    streaming = false;
+    updateSendLabel();
     // Only drop the `active` accent — leave `hidden` untouched. On `done` the
     // reload (loadSession) hides the stream area after re-rendering the thread;
     // if we reset the whole className here we'd un-hide it and show the finished
@@ -626,11 +661,13 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     notice.classList.add('hidden');
     // Stream is over (done reloads via loadSession; error stays here) — offer
     // Continue again so the user can nudge a stalled/errored session forward.
-    showContinue(!!currentSessionId);
+    showContinue(!!currentSessionId && !sessionRunning);
+
   }
 
   await tryConnect();
   finalise();
+  return delivered;
 }
 
 // ─── Import sessions from files ───────────────────────────────────────────────
@@ -674,23 +711,50 @@ async function importFiles(fileList) {
   setTimeout(() => banner.remove(), 4000);
 }
 
-// ─── New session modal ──────────────────────────────────────────────────────
-async function openNewModal(selectPath) {
-  const modal = $('modal-new');
-  $('task-input').value = '';
-  // Reset the inline new-project form each time the modal opens.
-  $('new-project-form').classList.add('hidden');
-  $('new-project-name').value = '';
-  $('new-project-error').classList.add('hidden');
-  $('project-notice').classList.add('hidden');
-  modal.classList.remove('hidden');
-  await loadFolders(typeof selectPath === 'string' ? selectPath : undefined);
+// ─── New session compose ─────────────────────────────────────────────────────
+// Clicking "+ New" no longer opens a separate modal — it puts the conversation
+// pane itself into an empty "compose" state: the project picker appears inline
+// above the reply box, and the first message typed there both creates the
+// session and becomes its opening task. This gives compose the exact same
+// reply box, attachments, drag-and-drop and mic as every later reply, instead
+// of a second parallel set of controls that could (and did) diverge from it.
+let composingNew = false; // true from "+ New" until the first message is sent
+
+function startCompose() {
+  if (voiceBusy || recording) return;
+  openDraft('new');
+  navigate('/new', false);
+  if (streamAbort) streamAbort.abort();
+  streamAbort = null;
+  clearInterval(pollTimer);
+  composingNew = true;
+  sessionRunning = false;
+  currentSessionId = null;
+  streaming = false;
+  updateSendLabel();
+
+  showConvo(true);
+  highlightActive(null);
+  $('session-title').textContent = 'New session';
+  $('session-status').innerHTML = '';
+  $('session-project-badge').classList.add('hidden');
+  $('messages-container').innerHTML =
+    '<div class="empty" data-testid="compose-hint"><h3>New session</h3><p>Pick a project (optional) and describe the task below.</p></div>';
+  $('stream-area').classList.add('hidden');
+  $('activity-area').classList.add('hidden');
+  $('btn-stop').classList.add('hidden');
+  showContinue(false);
+  $('composer-project').classList.add('hidden');
+  $('new-session-project').classList.remove('hidden');
+  $('reply-input').focus();
+  loadNewSessionFolders(composerDrafts.get('new')?.project || projectFilter);
 }
 
 // Populate the project-folder select from the agent's project list. `selectPath`
-// pre-selects a project id (used right after creating one). Kept separate from
-// openNewModal so create-project can refresh the list without reopening.
-async function loadFolders(selectPath) {
+// pre-selects a project id (used right after creating one).
+async function loadNewSessionFolders(selectPath) {
+  projectsReady = false;
+  updateSendLabel();
   const sel = $('folder-select');
   selectPath ||= sel.value;
   sel.innerHTML = '<option value="">Loading folders…</option>';
@@ -704,22 +768,25 @@ async function loadFolders(selectPath) {
     if (!tree.length) {
       sel.innerHTML = '<option value="">No folders available</option>';
     } else {
-      sel.innerHTML = '<option value="">Select a folder…</option>' +
+      sel.innerHTML = '<option value="">No project (optional)</option>' +
         tree.map(f => `<option value="${esc(f.path)}">${esc(f.name)}</option>`).join('');
       sel.disabled = false;
       if (selectPath) sel.value = selectPath;
     }
+    projectsReady = true;
+    updateSendLabel();
     return true;
   } catch {
+    setAttachHint('Не удалось загрузить проекты. Нажмите «+ New», чтобы повторить.', 'error');
     sel.innerHTML = '<option value="">Failed to load folders</option>';
     return false;
   }
 }
 
-// Populates the sidebar project filter (not the modal's folder-select, which
-// loadFolders owns) and the projectId → name lookup used for the per-session
-// badge. Project selection for starting a NEW session lives in the modal only —
-// this dropdown is purely a filter over the existing session list.
+// Populates the sidebar project filter (not the compose-mode folder-select,
+// which loadNewSessionFolders owns) and the projectId → name lookup used for
+// the per-session badge. This dropdown is purely a filter over the existing
+// session list.
 function renderProjects(tree) {
   projectNames = new Map(tree.map(p => [p.path, p.name]));
   const sel = $('project-filter');
@@ -761,13 +828,15 @@ async function createProject() {
     });
     const data = await res.json();
     if (!res.ok || !data.project) throw new Error(data.error || `HTTP ${res.status}`);
-    const loaded = await loadFolders(data.project.id);
+    const loaded = await loadNewSessionFolders(data.project.id);
     const sel = $('folder-select');
     if (!loaded || sel.value !== data.project.id) {
       sel.add(new Option(data.project.name, data.project.id));
       sel.disabled = false;
       sel.value = data.project.id;
     }
+    projectsReady = true;
+    updateSendLabel();
     const notice = $('project-notice');
     notice.textContent = `Проект «${data.project.name}» создан и выбран. ${loaded ? '' : 'Список временно недоступен.'}`;
     notice.classList.remove('hidden');
@@ -783,42 +852,10 @@ async function createProject() {
   }
 }
 
-async function submitNewSession() {
-  if (voiceBusy) { setVoiceStatus('Остановите запись и дождитесь расшифровки', 'busy'); return; }
-  const path    = $('folder-select').value;
-  const message = $('task-input').value.trim();
-  const btn     = $('btn-start-new');
-  if (!message) { $('task-input').focus(); return; }
-
-  btn.disabled = true;
-  btn.textContent = 'Starting…';
-
-  try {
-    // The backend creates the session implicitly inside /web/run — no separate
-    // create step. We don't have an id yet; it arrives on the SSE `done` event.
-    $('modal-new').classList.add('hidden');
-    currentSessionId = null;
-    showConvo(true);
-    highlightActive(null);
-    $('session-title').textContent = path || 'New session';
-    $('session-status').innerHTML = '';
-    $('messages-container').innerHTML = '';
-
-    // MVP folder targeting: prepend the chosen folder to the task text.
-    const task = path ? `[Work in folder: ${path}]\n\n${message}` : message;
-    await startStream('/web/run', { task }, message);
-  } catch (err) {
-    alert('Error starting session: ' + err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Start';
-  }
-}
-
 // ─── File attachments (drag-drop / paste) ────────────────────────────────────
 // UX: dropping or pasting files just *stages* them as chips next to the reply —
 // nothing is uploaded yet, so the user can add/remove before committing. The
-// actual upload happens on Send (see sendReply), matching "insert the name now,
+// actual upload happens on Send (see dispatchMessage), matching "insert the name now,
 // upload on submit". Images get a live thumbnail via a local object URL.
 const MAX_ATTACH = 3 * 1024 * 1024;
 let pendingAttachments = []; // { file, name, size, type, localUrl }
@@ -880,10 +917,13 @@ function addFiles(fileList) {
   else if (files.length) setAttachHint(`${pendingAttachments.length} attachment(s) ready`, 'ok');
 }
 
-// Upload staged files to the worker, returning stored refs {id,name,type,size,url}.
-async function uploadPending() {
+// Upload a list of staged files to the worker, returning stored refs
+// {id,name,type,size,url}. Takes the list explicitly (rather than always
+// reading the live `pendingAttachments`) because a queued message carries its
+// own snapshot, taken at queue time — see queueMessage.
+async function uploadFiles(list) {
   const refs = [];
-  for (const a of pendingAttachments) {
+  for (const a of list) {
     const res = await api('/web/upload', {
       method: 'POST',
       headers: { 'Content-Type': a.type, 'x-filename': encodeURIComponent(a.name) },
@@ -896,31 +936,50 @@ async function uploadPending() {
   return refs;
 }
 
-// ─── Reply ──────────────────────────────────────────────────────────────────
-async function sendReply() {
-  if (voiceBusy) { setVoiceStatus('Остановите запись и дождитесь расшифровки', 'busy'); return; }
-  const input   = $('reply-input');
-  const message = input.value.trim();
-  if ((!message && !pendingAttachments.length) || !currentSessionId) return;
-
-  let attachments = [];
-  if (pendingAttachments.length) {
-    const btnSend = $('btn-send');
-    btnSend.disabled = true;
-    setAttachHint('Uploading…', 'busy');
-    try {
-      attachments = await uploadPending();
-    } catch (err) {
-      setAttachHint(`Upload failed: ${err.message}`, 'error');
-      btnSend.disabled = false;
-      return;
-    }
-    clearAttachments();
-    setAttachHint('');
+// Submission snapshots its destination before any asynchronous upload.
+async function sendMessage() {
+  if (voiceBusy || recording) { setVoiceStatus('Остановите запись и дождитесь расшифровки', 'busy'); return; }
+  if (streaming || sessionRunning || dispatching || (composingNew && !projectsReady)) return;
+  const message = $('reply-input').value.trim();
+  if ((!message && !pendingAttachments.length) || (!currentSessionId && !composingNew)) return;
+  rememberDraft();
+  const destination = draftDestination;
+  const isNew = composingNew;
+  const project = $('folder-select').value;
+  const files = pendingAttachments.slice();
+  dispatching = true;
+  updateSendLabel();
+  try {
+    const attachments = await uploadFiles(files);
+    // A navigation during upload retains the source draft for an explicit send.
+    if (draftDestination !== destination) return;
+    $('reply-input').value = '';
+    pendingAttachments = [];
+    renderAttachments();
+    rememberDraft();
+    const task = project ? `[Work in folder: ${project}]\n\n${message}` : message;
+    const delivered = await startStream(isNew ? '/web/run' : `/web/reply/${encodeURIComponent(destination)}`,
+      isNew ? {task, attachments} : {message, attachments}, message, attachments);
+    if (!delivered) {
+      if (draftDestination === destination) rememberDraft();
+      const draft = composerDrafts.get(destination) || {message: '', attachments: []};
+      draft.message = [message, draft.message].filter(Boolean).join('\n\n');
+      draft.attachments = [...files, ...draft.attachments];
+      draft.project = project;
+      composerDrafts.set(destination, draft);
+      if (draftDestination === destination) {
+        $('reply-input').value = draft.message;
+        pendingAttachments = draft.attachments.slice();
+        renderAttachments();
+        setAttachHint('Подтверждение не получено. Черновик сохранён; проверьте историю перед повторной отправкой.', 'error');
+      }
+    } else files.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl));
+  } catch (err) {
+    if (draftDestination === destination) setAttachHint(`Не удалось отправить: ${err.message}. Черновик сохранён.`, 'error');
+  } finally {
+    dispatching = false;
+    updateSendLabel();
   }
-
-  input.value = '';
-  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message, attachments }, message, attachments);
 }
 
 // ─── Voice input (Deepgram) ──────────────────────────────────────────────────
@@ -932,12 +991,11 @@ async function sendReply() {
 let mediaRecorder = null;
 let recordChunks = [];
 let recording = false;
-let voiceTarget = 'reply-input';
 let voiceBusy = false;
-const voiceButton = () => $(voiceTarget === 'task-input' ? 'btn-task-mic' : 'btn-mic');
+const voiceButton = () => $('btn-mic');
 
 function setVoiceStatus(text, kind = '') {
-  const el = $(voiceTarget === 'task-input' ? 'task-voice-status' : 'voice-status');
+  const el = $('voice-status');
   if (!text) { el.classList.add('hidden'); el.textContent = ''; el.removeAttribute('role'); return; }
   el.classList.remove('hidden');
   el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
@@ -945,10 +1003,9 @@ function setVoiceStatus(text, kind = '') {
   el.textContent = text;
 }
 
-async function toggleRecording(target = 'reply-input') {
+async function toggleRecording() {
   if (recording) { stopRecording(); return; }
   if (voiceBusy) return;
-  voiceTarget = target;
   const btn = voiceButton();
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     setVoiceStatus('Voice input not supported in this browser', 'error');
@@ -995,7 +1052,7 @@ function stopRecording() {
 }
 
 async function transcribeBlob(blob, attempt = 0) {
-  const input = $(voiceTarget);
+  const input = $('reply-input');
   setVoiceStatus(attempt ? `Transcribing… (retry ${attempt})` : 'Transcribing…', 'busy');
   try {
     const res = await api('/web/transcribe', {
@@ -1028,9 +1085,10 @@ async function transcribeBlob(blob, attempt = 0) {
 // the same reply+stream path as a typed message, so it works identically on the
 // real agent backend (which treats it as a plain instruction to keep going).
 async function continueSession() {
-  if (!currentSessionId) return;
-  const msg = 'продолжай';
-  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message: msg }, msg);
+  if (!currentSessionId || streaming || sessionRunning || dispatching) return;
+  if ($('reply-input').value.trim() || pendingAttachments.length) { $('reply-input').focus(); return; }
+  $('reply-input').value = 'продолжай';
+  await sendMessage();
 }
 
 // ─── Stop ───────────────────────────────────────────────────────────────────
@@ -1038,6 +1096,8 @@ async function stopSession() {
   if (!currentSessionId) return;
   if (streamAbort) streamAbort.abort();
   clearInterval(pollTimer);
+  streaming = false;
+  updateSendLabel();
   try {
     await api(`/web/stop/${encodeURIComponent(currentSessionId)}`, { method: 'POST' });
   } catch {}
@@ -1056,25 +1116,40 @@ async function route() {
   if (!requireAuth()) return;
   clearInterval(pollTimer);
   $('activity-area').classList.add('hidden');
-  if (streamAbort) { streamAbort.abort(); streamAbort = null; }
+  if (streamAbort) {
+    // Tear down synchronously rather than waiting for the aborted stream's own
+    // finalise() to run — that one bails out early (streamAbort no longer
+    // matches its controller) and would otherwise leave `streaming` stuck
+    // true forever, silently queuing every future send instead of sending it.
+    streamAbort.abort();
+    streamAbort = null;
+    streaming = false;
+    updateSendLabel();
+  }
 
   // The list pane is always visible — keep it fresh on every route.
   await Promise.all([loadSessions(), loadProjects()]);
 
   const hash = location.hash.slice(1); // strip '#'
+  if (hash === '/new') { startCompose(); return; }
   if (hash.startsWith('/session/')) {
     const id = hash.slice('/session/'.length);
     if (id) { await loadSession(id); return; }
   }
   // Nothing selected → show the placeholder.
+  openDraft(null);
+  sessionRunning = false;
   currentSessionId = null;
+  composingNew = false;
+  $('new-session-project').classList.add('hidden');
   showConvo(false);
   highlightActive(null);
   showContinue(false); // no session selected → nothing to continue
+  updateSendLabel();
 }
 
 // ─── Event listeners ────────────────────────────────────────────────────────
-$('btn-new').addEventListener('click', openNewModal);
+$('btn-new').addEventListener('click', startCompose);
 
 $('btn-import').addEventListener('click', () => $('import-file').click());
 $('import-file').addEventListener('change', e => importFiles(e.target.files));
@@ -1106,12 +1181,14 @@ $('project-filter').addEventListener('change', e => {
 $('btn-continue').addEventListener('click', continueSession);
 $('btn-stop').addEventListener('click', stopSession);
 
-$('btn-mic').addEventListener('click', () => toggleRecording('reply-input'));
-$('btn-task-mic').addEventListener('click', () => toggleRecording('task-input'));
+$('btn-mic').addEventListener('click', () => toggleRecording());
 
-$('btn-send').addEventListener('click', sendReply);
+$('btn-send').addEventListener('click', sendMessage);
+$('reply-input').addEventListener('input', rememberDraft);
+$('btn-attach').addEventListener('click', () => $('attach-file').click());
+$('attach-file').addEventListener('change', e => { addFiles(e.target.files); rememberDraft(); e.target.value = ''; });
 $('reply-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendReply(); }
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
 });
 
 // ─── Drag-and-drop + paste of files ───────────────────────────────────────────
@@ -1144,12 +1221,6 @@ $('reply-input').addEventListener('paste', e => {
   if (files && files.length) { e.preventDefault(); addFiles(files); }
 });
 
-function closeNewModal() {
-  if (voiceBusy && voiceTarget === 'task-input') { if (recording) stopRecording(); return; }
-  $('modal-new').classList.add('hidden');
-}
-$('btn-cancel-new').addEventListener('click', closeNewModal);
-$('btn-start-new').addEventListener('click', submitNewSession);
 $('btn-new-project').addEventListener('click', () => {
   const form = $('new-project-form');
   form.classList.toggle('hidden');
@@ -1158,9 +1229,6 @@ $('btn-new-project').addEventListener('click', () => {
 $('btn-create-project').addEventListener('click', createProject);
 $('new-project-name').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); createProject(); }
-});
-$('modal-new').addEventListener('click', e => {
-  if (e.target === e.currentTarget) closeNewModal();
 });
 
 window.addEventListener('hashchange', route);

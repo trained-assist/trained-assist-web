@@ -121,7 +121,7 @@ body {
 
 /* Right rail: controls on top, spacious reply below — narrow */
 .pane-actions {
-  width: 300px;
+  width: clamp(340px, 28vw, 390px);
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--surface);
@@ -150,6 +150,7 @@ body {
   flex-shrink: 0;
 }
 .convo-title { font-size: 16px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-project-badge { font-size: 12px; color: var(--text-muted); background: var(--surface-2, #f1f1f1); padding: 3px 10px; border-radius: 99px; flex-shrink: 0; white-space: nowrap; }
 .nav-back { color: var(--accent); cursor: pointer; text-decoration: none; font-size: 18px; white-space: nowrap; background: none; border: none; padding: 4px 6px; }
 .nav-back:hover { text-decoration: none; opacity: 0.7; }
 .mobile-only { display: none; }
@@ -270,7 +271,7 @@ input:focus, textarea:focus, select:focus {
 .session-item:hover { background: var(--bg); }
 .session-item.active { background: var(--bg); border-left-color: var(--accent); }
 .session-info { flex: 1; min-width: 0; }
-.session-path { font-weight: 600; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.session-path { font-weight: 600; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; display: block; }
 .session-meta { font-size: 13px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Messages */
@@ -405,6 +406,32 @@ input:focus, textarea:focus, select:focus {
   min-height: 120px;
   resize: none;
 }
+.new-session-project {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.reply-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--surface-2, #f1f1f1);
+  font-size: 12px;
+}
+.reply-queue-label { color: var(--text-muted); font-weight: 600; }
+.reply-queue-item { display: flex; align-items: center; gap: 6px; }
+.reply-queue-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-queue-remove { border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 13px; flex-shrink: 0; }
+.reply-queue-remove:hover { color: var(--danger); }
 .reply-buttons { display: flex; gap: 8px; flex-shrink: 0; }
 .btn-mic { flex: 0 0 auto; justify-content: center; padding: 12px 14px; font-size: 14px; }
 .btn-mic.recording { background: var(--danger, #e5484d); color: #fff; animation: mic-pulse 1.2s ease-in-out infinite; }
@@ -497,24 +524,6 @@ input:focus, textarea:focus, select:focus {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Modal */
-.modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.5);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 100;
-  padding: 16px;
-}
-.modal {
-  background: var(--surface);
-  border-radius: var(--radius);
-  width: 100%; max-width: 480px;
-  padding: 24px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-}
-.modal h2 { font-size: 17px; margin-bottom: 16px; }
-.modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
-
 /* Empty */
 .empty {
   text-align: center;
@@ -538,7 +547,6 @@ input:focus, textarea:focus, select:focus {
 .session-project { font-size: 11px; color: var(--text-muted); background: var(--bg); border-radius: 4px; padding: 1px 6px; margin-top: 4px; display: inline-block; }
 .session-item > .badge { flex-shrink: 0; align-self: flex-start; }
 .reply-buttons { flex-wrap: wrap; }
-.modal { max-height: 95dvh; overflow-y: auto; }
 @media (max-width: 860px) { .pane-list { width: 100%; } .convo-title { white-space: normal; max-height: 4.5em; } }
 
 @media (max-width: 860px) {
@@ -548,6 +556,27 @@ input:focus, textarea:focus, select:focus {
   .reply-form textarea { min-height: 60px; }
   .reply-label { display: none; }
   .reply-buttons { position: sticky; bottom: 0; background: var(--surface); }
+}
+
+/* Unified composer: destination above input, destructive action separated below. */
+.convo-title { white-space: normal; overflow-wrap: anywhere; overflow: visible; max-height: none; }
+.convo-header { flex-wrap: wrap; max-height: 35dvh; overflow-y: auto; }
+.composer-project, .session-project { overflow-wrap: anywhere; max-width: 100%; }
+.stop-row { flex-shrink: 0; }
+.stop-row:has(button:not(.hidden)) { border-top: 1px solid var(--border); padding-top: 12px; }
+.stop-row .btn { width: 100%; justify-content: center; }
+.reply-form { overflow-y: auto; }
+.folder-row { flex-wrap: wrap; }
+.folder-row select, .folder-row input { width: 100%; }
+.reply-buttons .btn-send { flex-basis: 100%; }
+@media (min-width: 861px) and (max-width: 1150px) {
+  .pane-list { width: 280px; }
+  .pane-actions { width: 340px; }
+}
+@media (max-width: 860px) {
+  .pane-actions { width: 100%; max-height: 55dvh; }
+  .reply-form textarea { flex: 1 0 80px; }
+  .reply-buttons { position: static; }
 }
 
 #restart-intents { padding: 12px; max-height: 35vh; overflow-y: auto; border-bottom: 1px solid var(--border); }
