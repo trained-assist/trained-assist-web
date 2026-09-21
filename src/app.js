@@ -1112,7 +1112,17 @@ async function stopSession() {
 }
 
 // ─── Router ─────────────────────────────────────────────────────────────────
+function destinationForPath(path) {
+  if (path === '/new') return 'new';
+  if (path.startsWith('/session/')) return path.slice('/session/'.length) || null;
+  return null;
+}
 function navigate(path, pushState = true) {
+  // Swap the draft bucket right here, synchronously — `location.hash = path`
+  // only fires `hashchange` (and thus route()) on a later task, not before
+  // this call returns. Anything typed or dropped in that gap would otherwise
+  // still land in the *previous* destination's bucket.
+  openDraft(destinationForPath(path));
   if (pushState) location.hash = path;
   else history.replaceState(null, '', `#${path}`);
 }
@@ -1135,16 +1145,11 @@ async function route() {
   }
 
   // Swap the composer's draft bucket synchronously, before any awaited network
-  // work below. Otherwise the old destination's input/attachments stay live
-  // and editable during the prefetch, and keystrokes or file drops landing in
-  // that window get remembered under the wrong (stale) destination once the
-  // async openDraft() finally runs — the exact race that made PR #26's fix
-  // still flaky (session-title existing in the DOM already lets a test's
-  // waitFor() resolve before this prefetch settles).
-  const destination = hash === '/new' ? 'new'
-    : hash.startsWith('/session/') ? (hash.slice('/session/'.length) || null)
-    : null;
-  openDraft(destination);
+  // work below. navigate() already does this for clicks/back-button-free
+  // transitions; this covers hashchange firing without navigate() (back/
+  // forward buttons, a manually-edited hash) so the same rule always holds:
+  // the previous destination's input is never left live during the prefetch.
+  openDraft(destinationForPath(hash));
 
   // The list pane is always visible — keep it fresh on every route.
   await Promise.all([loadSessions(), loadProjects()]);
