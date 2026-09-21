@@ -52,3 +52,23 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  autofix:
+    needs: [check]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      needs.check.result == 'failure' &&
+      !startsWith(github.head_ref, 'fix/ci-')
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: trained-assist/pr-autofix/.github/workflows/autofix-callable.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      original_branch: ${{ github.head_ref }}
+      run_id: ${{ github.run_id }}
+    secrets:
+      openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+      gh_token: ${{ secrets.AUTOFIX_PAT || github.token }}
