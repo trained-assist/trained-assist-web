@@ -248,6 +248,10 @@ function wireTestsToggle() {
 }
 
 // ─── Session detail ─────────────────────────────────────────────────────────
+// Bumped by every navigation (route() dispatch or a direct startCompose() call)
+// so a route() that's still awaiting its prefetch when a newer navigation lands
+// can recognize it's stale and bail out instead of re-dispatching late.
+let navSeq = 0;
 let currentSessionId = null;
 let streamAbort = null;
 let pollTimer = null;
@@ -722,6 +726,7 @@ let composingNew = false; // true from "+ New" until the first message is sent
 
 function startCompose() {
   if (voiceBusy || recording) return;
+  navSeq++; // supersede any route() still awaiting its prefetch from a prior navigation
   openDraft('new');
   navigate('/new', false);
   if (streamAbort) streamAbort.abort();
@@ -1107,13 +1112,25 @@ async function stopSession() {
 }
 
 // ─── Router ─────────────────────────────────────────────────────────────────
+function destinationForPath(path) {
+  if (path === '/new') return 'new';
+  if (path.startsWith('/session/')) return path.slice('/session/'.length) || null;
+  return null;
+}
 function navigate(path, pushState = true) {
+  // Swap the draft bucket right here, synchronously — `location.hash = path`
+  // only fires `hashchange` (and thus route()) on a later task, not before
+  // this call returns. Anything typed or dropped in that gap would otherwise
+  // still land in the *previous* destination's bucket.
+  openDraft(destinationForPath(path));
   if (pushState) location.hash = path;
   else history.replaceState(null, '', `#${path}`);
 }
 
 async function route() {
   if (!requireAuth()) return;
+  const seq = ++navSeq; // this route() call owns navSeq until a newer navigation bumps it
+  const hash = location.hash.slice(1); // strip '#' — captured now, not after the await below
   clearInterval(pollTimer);
   $('activity-area').classList.add('hidden');
   if (streamAbort) {
@@ -1127,17 +1144,27 @@ async function route() {
     updateSendLabel();
   }
 
+  // Swap the composer's draft bucket synchronously, before any awaited network
+  // work below. navigate() already does this for clicks/back-button-free
+  // transitions; this covers hashchange firing without navigate() (back/
+  // forward buttons, a manually-edited hash) so the same rule always holds:
+  // the previous destination's input is never left live during the prefetch.
+  openDraft(destinationForPath(hash));
+
   // The list pane is always visible — keep it fresh on every route.
   await Promise.all([loadSessions(), loadProjects()]);
+  // A newer navigation (another route() call, or a direct startCompose()) landed
+  // while we were fetching — applying our now-stale target would re-dispatch to
+  // wherever the hash happens to be *now*, clobbering whatever the user already
+  // moved on to. Bail out silently; the newer navigation owns the outcome.
+  if (seq !== navSeq) return;
 
-  const hash = location.hash.slice(1); // strip '#'
   if (hash === '/new') { startCompose(); return; }
   if (hash.startsWith('/session/')) {
     const id = hash.slice('/session/'.length);
     if (id) { await loadSession(id); return; }
   }
-  // Nothing selected → show the placeholder.
-  openDraft(null);
+  // Nothing selected → show the placeholder (draft bucket already swapped above).
   sessionRunning = false;
   currentSessionId = null;
   composingNew = false;
