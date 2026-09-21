@@ -22,19 +22,57 @@ jobs:
       - name: Syntax check
         run: node --check src/app.js
 
-  auto-merge:
-    needs: [check]
-    if: success() && github.event_name == 'pull_request'
+  staging-gate:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:staging
+
+  auto-merge:
+    needs: [check, staging-gate]
+    if: success() && github.event_name == 'pull_request' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Merge if up-to-date
         run: |
           PR=${{ github.event.pull_request.number }}
-          BEHIND=$(gh pr view $PR --json behindBy -q .behindBy 2>/dev/null || echo "0")
+          REPO=${{ github.repository }}
+          BEHIND=$(gh pr view $PR --repo $REPO --json behindBy -q .behindBy 2>/dev/null || echo "0")
           if [ "$BEHIND" = "0" ]; then
-            gh pr merge $PR --squash --delete-branch
+            gh pr merge $PR --repo $REPO --squash --delete-branch
           else
             echo "PR is $BEHIND commits behind — Merge Relay will update"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  autofix:
+    needs: [check]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      needs.check.result == 'failure' &&
+      !startsWith(github.head_ref, 'fix/ci-')
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: trained-assist/pr-autofix/.github/workflows/autofix-callable.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      original_branch: ${{ github.head_ref }}
+      run_id: ${{ github.run_id }}
+    secrets:
+      openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+      gh_token: ${{ secrets.AUTOFIX_PAT || github.token }}
