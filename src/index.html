@@ -49,6 +49,7 @@
           <div class="convo-header">
             <button class="nav-back mobile-only" id="btn-back" data-testid="back-to-sessions" aria-label="Back to sessions">←</button>
             <span class="convo-title" id="session-title" data-testid="session-title"></span>
+            <span id="session-project-badge" class="session-project-badge hidden" data-testid="session-project-badge"></span>
             <span id="session-status" data-testid="session-status"></span>
           </div>
 
@@ -67,20 +68,52 @@
           <button class="btn btn-primary" id="btn-new" data-testid="new-session">+ New</button>
           <button class="btn btn-ghost" id="btn-import" data-testid="import-sessions">↥ Import</button>
           <input type="file" id="import-file" data-testid="import-file" accept=".json,application/json" multiple hidden>
-          <button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session" title="Kill this session">✕ Kill</button>
         </div>
 
         <div class="reply-form">
-          <label class="reply-label" for="reply-input">Reply</label>
+          <label class="reply-label" id="composer-label" for="reply-input">Ответ в сессию</label>
+          <div id="composer-project" class="session-project hidden" data-testid="composer-project"></div>
+
+          <!-- Shown only while composing a brand-new session (before the first
+               send). Once the session exists its project shows as a badge in
+               the convo header instead — see session-project-badge. -->
+          <div id="new-session-project" class="new-session-project hidden" data-testid="new-session-project">
+            <div class="folder-row">
+              <select id="folder-select" data-testid="folder-select" aria-label="Проект новой сессии">
+                <option value="">Loading folders…</option>
+              </select>
+              <button type="button" class="btn btn-ghost" id="btn-new-project" data-testid="new-project"
+                      title="Create a new project">＋ New project</button>
+            </div>
+            <div class="field hidden" id="new-project-form" data-testid="new-project-form">
+              <div class="folder-row">
+                <input id="new-project-name" data-testid="new-project-name" type="text"
+                       placeholder="e.g. recruiting: Backend dev" maxlength="120" />
+                <select id="new-project-type" data-testid="new-project-type">
+                  <option value="">Generic</option>
+                  <option value="recruiting">Recruiting</option>
+                  <option value="expo">Exhibition</option>
+                </select>
+                <button type="button" class="btn btn-primary" id="btn-create-project" data-testid="create-project">Create</button>
+              </div>
+              <div id="new-project-error" class="hidden" role="alert" data-testid="new-project-error"></div>
+            </div>
+            <div id="project-notice" class="voice-status hidden" role="status"></div>
+          </div>
+
           <textarea id="reply-input" data-testid="reply-input" placeholder="Write a reply…  (Ctrl+Enter to send · drag files or paste screenshots)"></textarea>
           <div id="attachments" class="attachments hidden" data-testid="attachments"></div>
           <div id="attach-hint" class="voice-status hidden" data-testid="attach-hint" role="status" aria-live="polite"></div>
           <div id="voice-status" class="voice-status hidden" data-testid="voice-status" role="status" aria-live="polite"></div>
+          <div id="composer-notice" class="voice-status hidden" data-testid="composer-notice" role="status" aria-live="polite"></div>
           <div class="reply-buttons">
+            <button class="btn btn-ghost" id="btn-attach" data-testid="attach-file" aria-label="Добавить файл">📎 Файл</button>
+            <input type="file" id="attach-file" data-testid="file-input" multiple hidden>
             <button class="btn btn-ghost btn-mic" id="btn-mic" data-testid="mic-record" title="Dictate (voice input)" aria-label="Record voice">🎤 Voice</button>
             <button class="btn btn-primary hidden" id="btn-continue" data-testid="continue-session" title="Продолжить эту сессию">▷ Продолжай</button>
-            <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Send</button>
+            <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Отправить</button>
           </div>
+          <div class="stop-row"><button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session" title="Остановить выполнение">Остановить выполнение</button></div>
         </div>
       </aside>
     </div>
@@ -88,49 +121,6 @@
     <!-- Full-window drop target for drag-and-drop file attachments -->
     <div id="drop-overlay" class="drop-overlay hidden" data-testid="drop-overlay" aria-hidden="true">
       <div class="drop-overlay-inner">⇩ Drop files to attach<small>documents &amp; screenshots · max 3MB each</small></div>
-    </div>
-  </div>
-
-  <!-- New session modal -->
-  <div id="modal-new" class="modal-overlay hidden" data-testid="new-session-modal" role="dialog" aria-modal="true" aria-label="New Session">
-    <div class="modal">
-      <h2>New Session</h2>
-      <div class="field">
-        <label for="folder-select">Project folder</label>
-        <div class="folder-row">
-          <select id="folder-select" data-testid="folder-select">
-            <option value="">Loading folders…</option>
-          </select>
-          <button type="button" class="btn btn-ghost" id="btn-new-project" data-testid="new-project"
-                  title="Create a new project">＋ New project</button>
-        </div>
-      </div>
-      <!-- Inline new-project form (hidden until "＋ New project" is clicked) -->
-      <div class="field hidden" id="new-project-form" data-testid="new-project-form">
-        <label for="new-project-name">New project name</label>
-        <div class="folder-row">
-          <input id="new-project-name" data-testid="new-project-name" type="text"
-                 placeholder="e.g. recruiting: Backend dev" maxlength="120" />
-          <select id="new-project-type" data-testid="new-project-type">
-            <option value="">Generic</option>
-            <option value="recruiting">Recruiting</option>
-            <option value="expo">Exhibition</option>
-          </select>
-          <button type="button" class="btn btn-primary" id="btn-create-project" data-testid="create-project">Create</button>
-        </div>
-        <div id="new-project-error" class="hidden" role="alert" data-testid="new-project-error"></div>
-      </div>
-      <div id="project-notice" class="voice-status hidden" role="status"></div>
-      <div class="field">
-        <label for="task-input">Task</label>
-        <textarea id="task-input" data-testid="task-input" rows="4" placeholder="Describe what Claude should do…"></textarea>
-        <button type="button" class="btn btn-ghost btn-mic" id="btn-task-mic" data-testid="task-mic" aria-label="Диктовать задачу">🎤 Голосом</button>
-        <div id="task-voice-status" class="voice-status hidden" role="status"></div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" id="btn-cancel-new" data-testid="cancel-new">Cancel</button>
-        <button class="btn btn-primary" id="btn-start-new" data-testid="start-new">Start</button>
-      </div>
     </div>
   </div>
 
