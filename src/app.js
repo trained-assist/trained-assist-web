@@ -1134,6 +1134,18 @@ async function route() {
     updateSendLabel();
   }
 
+  // Swap the composer's draft bucket synchronously, before any awaited network
+  // work below. Otherwise the old destination's input/attachments stay live
+  // and editable during the prefetch, and keystrokes or file drops landing in
+  // that window get remembered under the wrong (stale) destination once the
+  // async openDraft() finally runs — the exact race that made PR #26's fix
+  // still flaky (session-title existing in the DOM already lets a test's
+  // waitFor() resolve before this prefetch settles).
+  const destination = hash === '/new' ? 'new'
+    : hash.startsWith('/session/') ? (hash.slice('/session/'.length) || null)
+    : null;
+  openDraft(destination);
+
   // The list pane is always visible — keep it fresh on every route.
   await Promise.all([loadSessions(), loadProjects()]);
   // A newer navigation (another route() call, or a direct startCompose()) landed
@@ -1147,8 +1159,7 @@ async function route() {
     const id = hash.slice('/session/'.length);
     if (id) { await loadSession(id); return; }
   }
-  // Nothing selected → show the placeholder.
-  openDraft(null);
+  // Nothing selected → show the placeholder (draft bucket already swapped above).
   sessionRunning = false;
   currentSessionId = null;
   composingNew = false;
