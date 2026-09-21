@@ -248,6 +248,10 @@ function wireTestsToggle() {
 }
 
 // ─── Session detail ─────────────────────────────────────────────────────────
+// Bumped by every navigation (route() dispatch or a direct startCompose() call)
+// so a route() that's still awaiting its prefetch when a newer navigation lands
+// can recognize it's stale and bail out instead of re-dispatching late.
+let navSeq = 0;
 let currentSessionId = null;
 let streamAbort = null;
 let pollTimer = null;
@@ -722,6 +726,7 @@ let composingNew = false; // true from "+ New" until the first message is sent
 
 function startCompose() {
   if (voiceBusy || recording) return;
+  navSeq++; // supersede any route() still awaiting its prefetch from a prior navigation
   openDraft('new');
   navigate('/new', false);
   if (streamAbort) streamAbort.abort();
@@ -1114,6 +1119,8 @@ function navigate(path, pushState = true) {
 
 async function route() {
   if (!requireAuth()) return;
+  const seq = ++navSeq; // this route() call owns navSeq until a newer navigation bumps it
+  const hash = location.hash.slice(1); // strip '#' — captured now, not after the await below
   clearInterval(pollTimer);
   $('activity-area').classList.add('hidden');
   if (streamAbort) {
@@ -1129,8 +1136,12 @@ async function route() {
 
   // The list pane is always visible — keep it fresh on every route.
   await Promise.all([loadSessions(), loadProjects()]);
+  // A newer navigation (another route() call, or a direct startCompose()) landed
+  // while we were fetching — applying our now-stale target would re-dispatch to
+  // wherever the hash happens to be *now*, clobbering whatever the user already
+  // moved on to. Bail out silently; the newer navigation owns the outcome.
+  if (seq !== navSeq) return;
 
-  const hash = location.hash.slice(1); // strip '#'
   if (hash === '/new') { startCompose(); return; }
   if (hash.startsWith('/session/')) {
     const id = hash.slice('/session/'.length);
