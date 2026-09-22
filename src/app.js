@@ -580,7 +580,12 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
                 await loadSession(sid);
               } else {
                 // No id came back (e.g. task produced no session) — refresh the list
+                // and say so explicitly. Silently stopping here used to leave the
+                // composer frozen on "Отправляю задачу…" forever with no feedback,
+                // which read as a hang (task actually finished server-side).
                 await loadSessions();
+                streamEl.innerHTML = '<div class="err" data-testid="stream-error" role="alert">'
+                  + 'Задача выполнена, но сессию не удалось определить автоматически — откройте её в списке слева.</div>';
               }
               return;
             } else if (msg.type === 'error') {
