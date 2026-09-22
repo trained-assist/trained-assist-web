@@ -5,6 +5,22 @@ import { chromium } from 'playwright';
 
 let projects = [], failTree = false, posts = 0, failUpload = false, streamMode = 'done';
 const submissions = [];
+const rpMoves = [], rpRenames = [];
+const rpPlan = {
+  plan: {
+    totalSessions: 3,
+    projects: [
+      { cluster: 'vacancy1', name: 'Вакансия 1', type: 'recruiting', sessionCount: 2, sessionIds: ['s1','s2'], memberTopics: [{id:'s1',topic:'Ищем кандидата'},{id:'s2',topic:'Собеседование'}], avgConfidence: 0.9, existingProjectId: null, clarity: 'clear', weakMembers: [] },
+      { cluster: 'expo1', name: 'Выставка 1', type: 'expo', sessionCount: 1, sessionIds: ['s3'], memberTopics: [{id:'s3',topic:'Стенд на выставке'}], avgConfidence: 0.8, existingProjectId: null, clarity: 'clear', weakMembers: [] },
+    ],
+    unassigned: [{ id: 's4', topic: 'Разовое' }],
+    warnings: [],
+  },
+  report: '# test',
+  projectCount: 2,
+  totalSessions: 3,
+  unassigned: 1,
+};
 const session = { id: 'real-session', title: 'Fallback', summary: { title: 'Проверить создание проектов и удобство веб-интерфейса', gist: 'Папки, голосовой ввод и состояние работы' }, status: 'completed', messageCount: 2, messages: [{role:'user',content:'Привет'}] };
 const server = createServer(async (req,res) => {
   const json = (data,code=200) => { res.writeHead(code, {'content-type':'application/json'});res.end(JSON.stringify(data)); };
@@ -12,6 +28,27 @@ const server = createServer(async (req,res) => {
   if(req.url === '/web/sessions') return json([session]);
   if(req.url === '/web/files/tree') return json(failTree ? {error:'unavailable'} : {tree:projects},failTree ? 502 : 200);
   if(req.url === '/web/project-create') {projects=[{path:'generic-new',name:'Новый проект'}]; return json({project:{id:'generic-new',name:'Новый проект'}});}
+  if(req.url === '/web/reproject-preview') return json(rpPlan);
+  if(req.url === '/web/reproject-adjust') {
+    const chunks=[];for await (const chunk of req) chunks.push(chunk);
+    const b = JSON.parse(Buffer.concat(chunks));
+    if (b.moves) rpMoves.push(...b.moves);
+    if (b.renames) rpRenames.push(...b.renames);
+    // Apply a move to the fake plan so the re-render reflects it.
+    if (b.moves) {
+      for (const mv of b.moves) {
+        const from = rpPlan.plan.projects.find(p => (p.sessionIds||[]).includes(mv.sessionId));
+        const to = rpPlan.plan.projects.find(p => p.cluster === mv.toCluster);
+        if (from && to) { from.sessionIds = from.sessionIds.filter(id=>id!==mv.sessionId); to.sessionIds.push(mv.sessionId); }
+      }
+    }
+    if (b.renames) {
+      for (const r of b.renames) { const p = rpPlan.plan.projects.find(p=>p.cluster===r.cluster); if (p && r.name) p.name = r.name; }
+    }
+    return json({ adjusted: true, plan: rpPlan.plan, report: '# updated' });
+  }
+  if(req.url === '/web/reproject-apply') return json({ applied: true, sessionsMoved: 3, projectsAffected: 2, ledgerWritten: true });
+  if(req.url === '/web/reproject-revert') return json({ reverted: 3 });
   if(req.url === '/web/upload') { await new Promise(r=>setTimeout(r,100)); return json(failUpload ? {error:'upload failed'} : {id:'file-1',name:'Файл.txt',size:4,type:'text/plain',url:'/web/file/file-1'},failUpload?502:200); }
   if(req.url.startsWith('/web/stop/')) {session.status='completed';return json({ok:true});}
   if(req.url === '/web/transcribe') return json({transcript:'Проверить голосовую задачу'});
@@ -155,5 +192,57 @@ try {
   assert(micBox.y >= 0 && micBox.y + micBox.height <= 844, 'mobile microphone is inside viewport');
   await page.screenshot({path: process.env.UX_SCREENSHOT || '/tmp/web-ux-mobile.png'});
   assert.deepEqual(errors,[]);
-  console.log('PASS: sidebar create-panel (project create/retry, task prefix, draft survives close/reopen, isolated from reply draft); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors');
+
+  // ── Reproject: the "⟳" button opens the restructure modal, shows the cheap-model
+  // proposal, lets the user move a session to another project and rename a project
+  // (both persist via /web/reproject-adjust), then apply (reversible) and revert.
+  // The button lives in the sidebar search row — come back to the list view first
+  // (mobile back button is mobile-only), then resize to a desktop width (the
+  // previous section leaves the mobile conversation open at 390px).
+  await page.getByTestId('back-to-sessions').click();
+  await page.getByTestId('session-item').waitFor({ state: 'visible' });
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.getByTestId('reproject').click();
+  await page.getByTestId('reproject-modal').waitFor({state:'visible'});
+  await page.getByTestId('rp-project').first().waitFor();
+  assert.equal(await page.getByTestId('rp-project').count(),2,'two proposed projects');
+  assert.equal(await page.getByTestId('rp-session').count(),3,'three sessions across projects');
+
+  // Move session s2 → expo1 via its dropdown.
+  const s2Sel = page.locator('[data-testid="rp-move"][data-session="s2"]');
+  await s2Sel.selectOption({ label: 'Выставка 1' });
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="rp-move"][data-session="s2"]').length === 0 || true);
+  await page.waitForTimeout(150);
+  assert.equal(rpMoves.length,1,'one move persisted');
+  assert.equal(rpMoves[0].sessionId,'s2');
+  assert.equal(rpMoves[0].toCluster,'expo1');
+
+  // Rename "Вакансия 1" → "Вакансия: Backend dev" (Enter commits the change event).
+  const nameInp = page.locator('[data-testid="rp-name"][data-cluster="vacancy1"]');
+  await nameInp.fill('Вакансия: Backend dev');
+  await nameInp.press('Enter');
+  await page.waitForTimeout(150);
+  assert.equal(rpRenames.length,1,'one rename persisted');
+  assert.equal(rpRenames[0].cluster,'vacancy1');
+  assert.equal(rpRenames[0].name,'Вакансия: Backend dev');
+
+  // Apply.
+  await page.getByTestId('reproject-apply').click();
+  await page.getByTestId('reproject-applied').waitFor();
+  assert.match(await page.getByTestId('reproject-applied').innerText(),/Перемещено сессий: 3/);
+
+  // Revert.
+  await page.getByTestId('reproject-revert').click();
+  await page.getByTestId('reproject-reverted').waitFor();
+  assert.match(await page.getByTestId('reproject-reverted').innerText(),/Откат: сессий возвращено — 3/);
+
+  // Close resets the modal to a fresh "analysing…" state for next open.
+  await page.getByTestId('reproject-close').click();
+  await page.getByTestId('reproject-modal').waitFor({state:'hidden'});
+  await page.getByTestId('reproject').click();
+  await page.getByTestId('reproject-body').waitFor({state:'visible'});
+  await page.getByTestId('reproject-close').click();
+  await page.getByTestId('reproject-modal').waitFor({state:'hidden'});
+  assert.deepEqual(errors,[]);
+  console.log('PASS: sidebar create-panel (project create/retry, task prefix, draft survives close/reopen, isolated from reply draft); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }

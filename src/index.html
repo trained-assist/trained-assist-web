@@ -73,9 +73,13 @@
         <div class="list-search">
           <input type="search" id="search-input" data-testid="search-input"
                  placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
-          <select id="project-filter" data-testid="project-filter" aria-label="Filter by project" title="Filter by project">
-            <option value="">Все проекты</option>
-          </select>
+          <div class="search-row">
+            <select id="project-filter" data-testid="project-filter" aria-label="Filter by project" title="Filter by project">
+              <option value="">Все проекты</option>
+            </select>
+            <button class="btn btn-ghost btn-icon" id="btn-reproject" data-testid="reproject"
+                    title="⟳ Переструктурировать проекты (авто-группировка сессий)" aria-label="Переструктурировать проекты">⟳</button>
+          </div>
         </div>
         <div id="sessions-list" class="list-scroll" data-testid="sessions-list" role="list"></div>
       </aside>
@@ -137,6 +141,22 @@
     <!-- Full-window drop target for drag-and-drop file attachments -->
     <div id="drop-overlay" class="drop-overlay hidden" data-testid="drop-overlay" aria-hidden="true">
       <div class="drop-overlay-inner">⇩ Drop files to attach<small>documents &amp; screenshots · max 3MB each</small></div>
+    </div>
+
+    <!-- Reproject: restructure the profile's projects automatically -->
+    <div id="reproject-modal" class="modal-overlay hidden" data-testid="reproject-modal" role="dialog" aria-modal="true" aria-labelledby="reproject-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="reproject-title" data-testid="reproject-title">⟳ Переструктурировать проекты</h3>
+          <button class="btn btn-ghost btn-icon" id="btn-reproject-close" data-testid="reproject-close"
+                  title="Закрыть" aria-label="Закрыть">✕</button>
+        </div>
+        <div id="reproject-body" class="modal-body" data-testid="reproject-body"></div>
+        <div id="reproject-actions" class="modal-actions hidden" data-testid="reproject-actions">
+          <button class="btn btn-danger" id="btn-reproject-revert" data-testid="reproject-revert">↩ Откатить</button>
+          <button class="btn btn-primary" id="btn-reproject-apply" data-testid="reproject-apply">✓ Применить</button>
+        </div>
+      </div>
     </div>
   </div>
 
