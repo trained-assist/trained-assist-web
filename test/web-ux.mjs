@@ -39,7 +39,13 @@ try {
   assert.match(await page.getByTestId('session-item').innerText(),/Проверить создание/);
   assert.equal(await page.getByTestId('session-item').count(),1,'short real session stays visible');
   assert(!await page.getByTestId('session-item').innerText().then(t=>t.includes('Done')));
+
+  // ── Sidebar create-panel: "+ New" opens a standalone panel (not the reply
+  // composer) with its own project picker, draft text and attachments — see
+  // src/app.js "Sidebar: new session". Project creation + folder-list retry
+  // after a transient failure still works from inside it.
   await page.getByTestId('new-session').click();
+  await page.getByTestId('create-panel').waitFor({state:'visible'});
   await page.getByTestId('new-project').click();
   await page.getByTestId('new-project-name').fill('Новый проект');
   failTree=true;
@@ -49,42 +55,72 @@ try {
   assert.equal(await page.getByTestId('folder-select').inputValue(),'generic-new');
   assert.match(await page.locator('#project-notice').innerText(),/создан и выбран/);
   failTree=false;
-  await page.getByTestId('reply-input').fill('Сохранить черновик новой задачи');
-  await page.getByTestId('file-input').setInputFiles({name:'Файл.txt',mimeType:'text/plain',buffer:Buffer.from('test')});
+  await page.getByTestId('create-input').fill('Новая задача с проектом');
+  await page.getByTestId('create-attach-file').setInputFiles({name:'Файл.txt',mimeType:'text/plain',buffer:Buffer.from('test')});
+  assert.equal(await page.getByTestId('create-attach-chip').count(),1);
+
+  // Sending from the create-panel hits /web/run with the project prefix baked
+  // into `task` (the same convention the old compose-mode used) and clears
+  // the panel back to empty once the upload+POST succeed.
+  await page.getByTestId('create-send').click();
+  await page.waitForFunction(()=>location.hash.includes('real-session'));
+  await page.getByTestId('create-panel').waitFor({state:'hidden'});
+  assert.equal(posts,1,'create-panel send posts exactly once');
+  assert.match(submissions[0].task,/Work in folder: generic-new/);
+  assert.match(submissions[0].task,/Новая задача с проектом/);
+  assert.equal(submissions[0].attachments.length,1);
+
+  // ── Create-panel draft survives close/reopen, and never touches the reply
+  // composer's per-session draft — the two share no state (that sharing was
+  // the #26/#28 navigation-race bug class this redesign structurally removes).
+  await page.getByTestId('new-session').click();
+  await page.getByTestId('create-panel').waitFor({state:'visible'});
+  await page.getByTestId('create-input').fill('Черновик, который не отправляли');
   await page.getByTestId('session-item').click();
   await page.getByTestId('session-title').waitFor();
-  await page.getByTestId('reply-input').fill('Отдельный ответ');
-  // Reopening the modal re-fetches the project tree (loadFolders → renderProjects),
-  // which is also how the sidebar project filter recovers from the earlier failure —
-  // there's no separate retry affordance for it.
-  await page.getByTestId('new-session').click();
-  await page.waitForFunction(()=>document.querySelector('#folder-select').value==='generic-new');
-  assert.equal(await page.getByTestId('folder-select').inputValue(),'generic-new');
+  await page.getByTestId('create-panel').waitFor({state:'hidden'});
+  // Re-navigating (route()) is also how the sidebar project filter recovers
+  // from the earlier transient failure — there's no separate retry affordance.
+  await page.waitForFunction(()=>document.querySelector('#project-filter option[value="generic-new"]'));
   assert.equal(await page.locator('#project-filter option[value="generic-new"]').count(),1,'sidebar filter picks up the new project');
-  assert.equal(await page.getByTestId('reply-input').inputValue(),'Сохранить черновик новой задачи');
-  assert.equal(await page.getByTestId('attach-chip').count(),1);
+  await page.getByTestId('reply-input').fill('Отдельный ответ');
+  await page.getByTestId('new-session').click();
+  await page.getByTestId('create-panel').waitFor({state:'visible'});
+  assert.equal(await page.getByTestId('create-input').inputValue(),'Черновик, который не отправляли','create-panel draft survives close/reopen');
+  assert.equal(await page.getByTestId('reply-input').inputValue(),'Отдельный ответ','reply draft untouched by reopening create-panel');
+  await page.getByTestId('create-cancel').click();
+  await page.getByTestId('create-panel').waitFor({state:'hidden'});
+  assert.equal(await page.getByTestId('reply-input').inputValue(),'Отдельный ответ','cancelling create-panel leaves the reply draft alone');
+
+  // ── Reply composer: per-session draft, real MediaRecorder dictation, upload
+  // failure recovery, idempotent double-send, no-retry on a dropped POST.
+  // The reply composer keeps its own attachment state (file-input/attach-chip),
+  // separate from the create-panel's — this is what makes a failed upload
+  // below actually exercise the failure path instead of a no-op empty upload.
   await page.getByTestId('reply-input').fill('');
+  await page.getByTestId('file-input').setInputFiles({name:'Файл.txt',mimeType:'text/plain',buffer:Buffer.from('test')});
+  assert.equal(await page.getByTestId('attach-chip').count(),1);
   await page.getByTestId('mic-record').click();
   await page.waitForFunction(()=>document.querySelector('#btn-mic').textContent.includes('Stop'));
   await page.waitForTimeout(300);
   await page.getByTestId('mic-record').click();
   await page.waitForFunction(()=>document.querySelector('#reply-input').value.includes('голосовую'));
   assert.match(await page.getByTestId('reply-input').inputValue(),/голосовую/);
-  assert.equal(posts,0,'dictation does not send automatically');
+  assert.equal(posts,1,'dictation does not send automatically');
   failUpload=true;
   await page.getByTestId('send-reply').click();
   await page.getByTestId('attach-hint').filter({hasText:'Черновик сохранён'}).waitFor();
   assert.match(await page.getByTestId('reply-input').inputValue(),/голосовую/);
-  assert.equal(await page.getByTestId('attach-chip').count(),1);
-  assert.equal(posts,0);
+  assert.equal(await page.getByTestId('attach-chip').count(),1,'failed upload keeps the attachment in the draft');
+  assert.equal(posts,1);
   failUpload=false;
   await page.getByTestId('send-reply').dblclick();
   await page.waitForTimeout(1200);
   assert.match(await page.getByTestId('activity').innerText(),/Ожидаю ответ агента/);
-  await page.waitForFunction(()=>location.hash.includes('real-session') && !document.querySelector('#btn-send').disabled);
-  assert.equal(posts,1,'double click creates one submission');
-  assert.match(submissions[0].task,/Work in folder: generic-new/);
-  assert.equal(submissions[0].attachments.length,1);
+  await page.waitForFunction(()=>!document.querySelector('#btn-send').disabled);
+  assert.equal(posts,2,'double click creates one submission');
+  assert.equal(submissions[1].task,undefined,'a reply never carries the create-panel\'s task/project prefix');
+  assert.match(submissions[1].message,/голосовую/);
   await page.getByTestId('reply-input').fill('');
   await page.getByTestId('mic-record').click();
   await page.waitForFunction(()=>document.querySelector('#btn-mic').textContent.includes('Stop'));
@@ -96,7 +132,7 @@ try {
   await page.getByTestId('reply-input').fill('Ответ при обрыве');
   await page.getByTestId('send-reply').click();
   await page.getByTestId('attach-hint').filter({hasText:'Подтверждение не получено'}).waitFor();
-  assert.equal(posts,2);
+  assert.equal(posts,3);
   assert.equal(await page.getByTestId('reply-input').inputValue(),'Ответ при обрыве');
   session.status='running';
   await page.reload();
@@ -119,5 +155,5 @@ try {
   assert(micBox.y >= 0 && micBox.y + micBox.height <= 844, 'mobile microphone is inside viewport');
   await page.screenshot({path: process.env.UX_SCREENSHOT || '/tmp/web-ux-mobile.png'});
   assert.deepEqual(errors,[]);
-  console.log('PASS: unified composer; preserved per-session drafts/files; upload failure; double click; no repeat POST; busy status; stop position; 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors');
+  console.log('PASS: sidebar create-panel (project create/retry, task prefix, draft survives close/reopen, isolated from reply draft); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }

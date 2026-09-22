@@ -109,6 +109,26 @@ body {
 .list-search select { padding: 8px 10px; flex-shrink: 0; max-width: 40%; }
 .list-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 
+.list-actions { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.list-actions .btn { flex: 1; justify-content: center; }
+
+/* Sidebar new-session panel — its own scrollable block, separate from the
+   session list below it and from the reply composer in the right rail. */
+.create-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.create-panel textarea { min-height: 90px; resize: vertical; }
+.create-buttons { display: flex; gap: 8px; align-items: center; }
+.create-buttons .btn-primary { margin-left: auto; }
+
 /* Center pane: conversation is the dominant surface, full height */
 .pane-convo {
   flex: 1;
@@ -405,16 +425,6 @@ input:focus, textarea:focus, select:focus {
   flex: 1;
   min-height: 120px;
   resize: none;
-}
-.new-session-project {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex-shrink: 0;
 }
 .reply-queue {
   display: flex;
