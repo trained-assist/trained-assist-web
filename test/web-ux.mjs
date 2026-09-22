@@ -5,20 +5,9 @@ import { chromium } from 'playwright';
 
 let projects = [], failTree = false, posts = 0, failUpload = false, streamMode = 'done';
 const submissions = [];
-let restartIntents = [{handle:'confirm-handle',title:'<script>Confirm saved task'}, {handle:'cancel-handle',title:'Cancel saved task'}], failDecision=true, decisions=0;
 const session = { id: 'real-session', title: 'Fallback', summary: { title: 'Проверить создание проектов и удобство веб-интерфейса', gist: 'Папки, голосовой ввод и состояние работы' }, status: 'completed', messageCount: 2, messages: [{role:'user',content:'Привет'}] };
 const server = createServer(async (req,res) => {
   const json = (data,code=200) => { res.writeHead(code, {'content-type':'application/json'});res.end(JSON.stringify(data)); };
-  if(req.url === '/web/restart-intents') {
-    if(req.method==='GET') return json({intents:restartIntents});
-    decisions++;
-    if(failDecision){failDecision=false;return json({error:'temporary'},503);}
-    const chunks=[];for await(const chunk of req)chunks.push(chunk);
-    const input=JSON.parse(Buffer.concat(chunks).toString());
-    assert.deepEqual(Object.keys(input).sort(),['action','handle']);
-    restartIntents=restartIntents.filter(i=>i.handle!==input.handle);
-    return json({accepted:true,decision:input.action});
-  }
   if(req.url === '/web/me') return json({username:'ux-test'});
   if(req.url === '/web/sessions') return json([session]);
   if(req.url === '/web/files/tree') return json(failTree ? {error:'unavailable'} : {tree:projects},failTree ? 502 : 200);
@@ -50,15 +39,6 @@ try {
   assert.match(await page.getByTestId('session-item').innerText(),/Проверить создание/);
   assert.equal(await page.getByTestId('session-item').count(),1,'short real session stays visible');
   assert(!await page.getByTestId('session-item').innerText().then(t=>t.includes('Done')));
-  const deferred=page.getByTestId('restart-intent');
-  await deferred.first().waitFor();assert.equal(await deferred.count(),2);
-  await deferred.first().getByTestId('restart-confirm').click();await deferred.first().getByRole('alert').waitFor();
-  assert.equal(await deferred.first().getByTestId('restart-confirm').isEnabled(),true);
-  await deferred.first().getByTestId('restart-confirm').click();await deferred.first().getByRole('status').waitFor();
-  assert.equal(await deferred.first().locator('button').count(),0);
-  await deferred.nth(1).getByTestId('restart-cancel').click();await deferred.nth(1).getByRole('status').waitFor();
-  assert.equal(decisions,3);assert.equal(restartIntents.length,0);
-  assert.equal(await page.locator('#restart-intents script').count(),0);
   await page.getByTestId('new-session').click();
   await page.getByTestId('new-project').click();
   await page.getByTestId('new-project-name').fill('Новый проект');

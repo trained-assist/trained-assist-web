@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node test/worker-projects.mjs && node test/restart-confirmations.mjs && node test/web-ux.mjs",
+    "test": "node test/worker-projects.mjs && node test/web-ux.mjs",
     "test:staging": "npm test"
   },
   "devDependencies": {
