@@ -23,6 +23,53 @@
                   title="Toggle light / dark" aria-label="Toggle light / dark theme">🌙</button>
           <button class="btn btn-ghost" id="btn-logout" data-testid="logout">Logout</button>
         </div>
+        <div class="list-actions">
+          <button class="btn btn-primary" id="btn-new" data-testid="new-session">+ New</button>
+          <button class="btn btn-ghost" id="btn-import" data-testid="import-sessions">↥ Import</button>
+          <input type="file" id="import-file" data-testid="import-file" accept=".json,application/json" multiple hidden>
+        </div>
+
+        <!-- Creating a session lives entirely in this panel: its own draft
+             text/attachments/project, with no dependency on the reply
+             composer or on navigation/routing (that coupling used to race
+             with session switching — see PRs #26/#28). Cancel just hides
+             it; the draft stays until Send, so reopening "+ New" restores
+             it for free, no separate draft store needed. -->
+        <div id="create-panel" class="create-panel hidden" data-testid="create-panel">
+          <div class="folder-row">
+            <select id="folder-select" data-testid="folder-select" aria-label="Проект новой сессии">
+              <option value="">Loading folders…</option>
+            </select>
+            <button type="button" class="btn btn-ghost" id="btn-new-project" data-testid="new-project"
+                    title="Create a new project">＋ New project</button>
+          </div>
+          <div class="field hidden" id="new-project-form" data-testid="new-project-form">
+            <div class="folder-row">
+              <input id="new-project-name" data-testid="new-project-name" type="text"
+                     placeholder="e.g. recruiting: Backend dev" maxlength="120" />
+              <select id="new-project-type" data-testid="new-project-type">
+                <option value="">Generic</option>
+                <option value="recruiting">Recruiting</option>
+                <option value="expo">Exhibition</option>
+              </select>
+              <button type="button" class="btn btn-primary" id="btn-create-project" data-testid="create-project">Create</button>
+            </div>
+            <div id="new-project-error" class="hidden" role="alert" data-testid="new-project-error"></div>
+          </div>
+          <div id="project-notice" class="voice-status hidden" role="status"></div>
+
+          <textarea id="create-input" data-testid="create-input" placeholder="Опишите задачу…  (Ctrl+Enter, чтобы начать)"></textarea>
+          <div id="create-attachments" class="attachments hidden" data-testid="create-attachments"></div>
+          <div id="create-hint" class="voice-status hidden" data-testid="create-hint" role="status" aria-live="polite"></div>
+          <div id="create-notice" class="voice-status hidden" data-testid="create-notice" role="status" aria-live="polite"></div>
+          <div class="create-buttons">
+            <button class="btn btn-ghost" id="btn-create-attach" data-testid="create-attach" aria-label="Добавить файл">📎 Файл</button>
+            <input type="file" id="create-attach-file" data-testid="create-attach-file" multiple hidden>
+            <button class="btn btn-ghost" id="btn-create-cancel" data-testid="create-cancel">Отмена</button>
+            <button class="btn btn-primary" id="btn-create-send" data-testid="create-send">Начать</button>
+          </div>
+        </div>
+
         <div class="list-search">
           <input type="search" id="search-input" data-testid="search-input"
                  placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
@@ -62,44 +109,13 @@
 
       </section>
 
-      <!-- Right rail: controls on top, spacious reply below -->
+      <!-- Right rail: reply to the selected session only. New-session
+           creation lives in the sidebar (see #create-panel) — this pane no
+           longer has a "compose" mode. -->
       <aside class="pane-actions" data-testid="pane-actions">
-        <div class="actions-bar">
-          <button class="btn btn-primary" id="btn-new" data-testid="new-session">+ New</button>
-          <button class="btn btn-ghost" id="btn-import" data-testid="import-sessions">↥ Import</button>
-          <input type="file" id="import-file" data-testid="import-file" accept=".json,application/json" multiple hidden>
-        </div>
-
         <div class="reply-form">
-          <label class="reply-label" id="composer-label" for="reply-input">Ответ в сессию</label>
+          <label class="reply-label" for="reply-input">Ответ в сессию</label>
           <div id="composer-project" class="session-project hidden" data-testid="composer-project"></div>
-
-          <!-- Shown only while composing a brand-new session (before the first
-               send). Once the session exists its project shows as a badge in
-               the convo header instead — see session-project-badge. -->
-          <div id="new-session-project" class="new-session-project hidden" data-testid="new-session-project">
-            <div class="folder-row">
-              <select id="folder-select" data-testid="folder-select" aria-label="Проект новой сессии">
-                <option value="">Loading folders…</option>
-              </select>
-              <button type="button" class="btn btn-ghost" id="btn-new-project" data-testid="new-project"
-                      title="Create a new project">＋ New project</button>
-            </div>
-            <div class="field hidden" id="new-project-form" data-testid="new-project-form">
-              <div class="folder-row">
-                <input id="new-project-name" data-testid="new-project-name" type="text"
-                       placeholder="e.g. recruiting: Backend dev" maxlength="120" />
-                <select id="new-project-type" data-testid="new-project-type">
-                  <option value="">Generic</option>
-                  <option value="recruiting">Recruiting</option>
-                  <option value="expo">Exhibition</option>
-                </select>
-                <button type="button" class="btn btn-primary" id="btn-create-project" data-testid="create-project">Create</button>
-              </div>
-              <div id="new-project-error" class="hidden" role="alert" data-testid="new-project-error"></div>
-            </div>
-            <div id="project-notice" class="voice-status hidden" role="status"></div>
-          </div>
 
           <textarea id="reply-input" data-testid="reply-input" placeholder="Write a reply…  (Ctrl+Enter to send · drag files or paste screenshots)"></textarea>
           <div id="attachments" class="attachments hidden" data-testid="attachments"></div>
