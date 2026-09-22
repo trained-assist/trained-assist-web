@@ -800,6 +800,177 @@ async function createProject() {
   }
 }
 
+// ─── Reproject: restructure the profile's projects ───────────────────────────
+// The "⟳" button opens a modal: run the cheap-model preview → show the proposed
+// project structure → the user can move sessions between projects and rename
+// projects (adjust) → apply (reversible) → revert. All via the worker→agent
+// bearer proxy (/web/reproject-*), same single source of truth as the bot.
+let rpPlan = null; // the current proposed plan
+
+function openReproject() {
+  $('reproject-modal').classList.remove('hidden');
+  $('reproject-actions').classList.add('hidden');
+  rpPlan = null;
+  $('reproject-body').innerHTML =
+    '<div class="loading"><span class="spinner"></span> Анализирую сессии дешёвой моделью…</div>';
+  runReprojectPreview();
+}
+
+function closeReproject() {
+  $('reproject-modal').classList.add('hidden');
+}
+
+async function runReprojectPreview() {
+  const body = $('reproject-body');
+  try {
+    const res = await api('/web/reproject-preview', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    rpPlan = data.plan || null;
+    renderReprojectPlan(data);
+  } catch (err) {
+    body.innerHTML = `<div class="err" role="alert" data-testid="reproject-error">Переструктурирование не удалось: ${esc(err.message)}</div>`;
+  }
+}
+
+// Render the plan as editable projects: each project shows its name (editable)
+// and its sessions (each with a dropdown to move it to another project).
+function renderReprojectPlan(data) {
+  const body = $('reproject-body');
+  const plan = rpPlan || (data && data.plan) || [];
+  if (!plan || !plan.projects) {
+    body.innerHTML = '<div class="err" role="alert">Нет данных для отображения.</div>';
+    return;
+  }
+  const projects = plan.projects || [];
+  const clusterOf = (sid) => (projects.find(p => (p.sessionIds || []).includes(sid)) || {}).cluster;
+  const opts = (sid) => projects.map(p =>
+    `<option value="${esc(p.cluster)}" ${p.cluster === clusterOf(sid) ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+
+  const html = projects.map(p => {
+    const clarity = p.clarity || 'mixed';
+    const conf = p.avgConfidence == null ? '' : ` · уверенность ${Math.round(p.avgConfidence * 100)}%`;
+    const sessions = (p.memberTopics && p.memberTopics.length ? p.memberTopics : (p.sessionIds || []).map(id => ({ id })))
+      .map(m => `<div class="rp-session" data-testid="rp-session" data-session="${esc(m.id)}">
+        <span class="rp-session-topic" title="${esc(m.topic || '')}">${esc(m.topic || m.id)}</span>
+        <select data-testid="rp-move" data-session="${esc(m.id)}" aria-label="Перенести сессию">${opts(m.id)}</select>
+      </div>`).join('');
+    return `<div class="rp-project" data-testid="rp-project" data-cluster="${esc(p.cluster)}">
+      <div class="rp-project-head">
+        <span class="rp-project-name"><input data-testid="rp-name" data-cluster="${esc(p.cluster)}"
+          value="${esc(p.name)}" aria-label="Имя проекта" /></span>
+        <span class="rp-clarity ${esc(clarity)}">${esc(clarity)}</span>
+      </div>
+      <div class="rp-project-meta">${p.sessionCount} сессий · тип ${esc(p.type || 'generic')}${conf}${p.existingProjectId ? ` · папка: ${esc(p.existingProjectId)}` : ' · новая папка'}</div>
+      <div>${sessions}</div>
+    </div>`;
+  }).join('');
+
+  const unassigned = (plan.unassigned || []).map(u =>
+    `<li class="rp-unassigned">«${esc(u.topic || u.id)}»</li>`).join('');
+
+  body.innerHTML = `
+    <p class="rp-hint">Предлагаемая структура — сессии сгруппированы дешёвой моделью. Перенесите сессии в нужные проекты, переименуйте, затем «Применить». Ничего не перемещено, всё обратимо.</p>
+    ${(plan.warnings || []).map(w => `<div class="rp-warning" role="note">${esc(w)}</div>`).join('')}
+    ${html}
+    ${unassigned ? `<div class="rp-project"><div class="rp-project-meta">Без проекта (${plan.unassigned.length})</div><ul>${unassigned}</ul></div>` : ''}
+  `;
+  $('reproject-actions').classList.remove('hidden');
+
+  // Wire the "move" dropdowns: onChange → persist an adjust to the agent.
+  body.querySelectorAll('[data-testid="rp-move"]').forEach(sel => {
+    sel.addEventListener('change', () => adjustReprojectSession(sel.dataset.session, sel.value));
+  });
+  // Wire the name inputs: on blur → persist a rename.
+  body.querySelectorAll('[data-testid="rp-name"]').forEach(inp => {
+    inp.addEventListener('change', () => adjustReprojectRename(inp.dataset.cluster, inp.value));
+  });
+}
+
+// Move one session to another project (persists via /web/reproject-adjust).
+async function adjustReprojectSession(sessionId, toCluster) {
+  if (!toCluster) return;
+  try {
+    const res = await api('/web/reproject-adjust', {
+      method: 'POST',
+      body: JSON.stringify({ moves: [{ sessionId, toCluster }] }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    rpPlan = data.plan || rpPlan;
+    renderReprojectPlan(data);
+  } catch (err) {
+    // Non-fatal: keep the modal open, show a note near the top.
+    const hint = $('reproject-body').querySelector('.rp-hint');
+    if (hint) hint.textContent = `⚠ Не удалось перенести: ${err.message}. Попробуйте ещё раз.`;
+  }
+}
+
+// Rename a project (persists via /web/reproject-adjust).
+async function adjustReprojectRename(cluster, name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return;
+  try {
+    const res = await api('/web/reproject-adjust', {
+      method: 'POST',
+      body: JSON.stringify({ renames: [{ cluster, name: trimmed }] }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    rpPlan = data.plan || rpPlan;
+    renderReprojectPlan(data);
+  } catch (err) {
+    const hint = $('reproject-body').querySelector('.rp-hint');
+    if (hint) hint.textContent = `⚠ Не удалось переименовать: ${err.message}.`;
+  }
+}
+
+// Apply the (possibly adjusted) plan — reversible.
+async function applyReproject() {
+  const btn = $('btn-reproject-apply');
+  btn.disabled = true;
+  btn.textContent = 'Применяю…';
+  try {
+    const res = await api('/web/reproject-apply', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    $('reproject-body').innerHTML =
+      `<p class="rp-hint" data-testid="reproject-applied">✓ Перемещено сессий: ${data.sessionsMoved}. Проекты: ${data.projectsAffected}. Обратимо — «↩ Откатить».</p>`;
+    await loadProjects();
+    await loadNewSessionFolders($('folder-select').value);
+    $('btn-reproject-revert').disabled = false;
+  } catch (err) {
+    $('reproject-body').innerHTML =
+      `<div class="err" role="alert">Не удалось применить: ${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✓ Применить';
+  }
+}
+
+// Revert the last apply (from the ledger).
+async function revertReproject() {
+  const btn = $('btn-reproject-revert');
+  btn.disabled = true;
+  try {
+    const res = await api('/web/reproject-revert', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    $('reproject-body').innerHTML =
+      `<p class="rp-hint" data-testid="reproject-reverted">↩ Откат: сессий возвращено — ${data.reverted}.</p>`;
+    await loadProjects();
+    await loadNewSessionFolders($('folder-select').value);
+  } catch (err) {
+    $('reproject-body').innerHTML =
+      `<div class="err" role="alert">Не удалось откатить: ${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // Staged attachments for the create-panel — the same stage-then-upload-on-
 // submit pattern as the reply composer's pendingAttachments (see below), but
 // a separate array/DOM so the two composers never share state.
@@ -1327,6 +1498,15 @@ $('btn-new-project').addEventListener('click', () => {
 $('btn-create-project').addEventListener('click', createProject);
 $('new-project-name').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); createProject(); }
+});
+
+// Reproject modal
+$('btn-reproject').addEventListener('click', openReproject);
+$('btn-reproject-close').addEventListener('click', closeReproject);
+$('btn-reproject-apply').addEventListener('click', applyReproject);
+$('btn-reproject-revert').addEventListener('click', revertReproject);
+$('reproject-modal').addEventListener('click', e => {
+  if (e.target === $('reproject-modal')) closeReproject();
 });
 
 window.addEventListener('hashchange', route);

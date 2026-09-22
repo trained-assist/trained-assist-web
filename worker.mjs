@@ -385,6 +385,32 @@ export class SessionHub {
         return json(503, { error: 'agent unavailable' });
       }
     }
+    // Project restructuring ("⟳ Переструктурировать") — proxy to the agent's
+    // /web/reproject-* bearer endpoints (single source of truth = reproject.js).
+    // Four operations, all on the LOGGED-IN profile, same delegation pattern as
+    // project-create: preview (cheap-model proposal), adjust (manual edit of the
+    // saved plan), apply (re-tag sessions, reversible), revert (undo last apply).
+    // The agent runs the cheap classification itself and streams nothing — these
+    // are plain JSON responses (preview can take 10-60s; the UI shows a spinner).
+    if (p.startsWith('/web/reproject-') && m === 'POST') {
+      if (!agentDelegation) return json(503, { error: 'agent unavailable' });
+      const endpoint = p.slice('/web'.length); // e.g. /reproject-preview
+      const target = AGENT_VERIFY.replace(/\/web\/verify$/, endpoint);
+      const username = await this.tokenUser(request);
+      let bodyIn = {};
+      try { bodyIn = await request.json(); } catch { return json(400, { error: 'bad json' }); }
+      try {
+        const r = await fetch(target, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+          body: JSON.stringify({ username, ...bodyIn }),
+        });
+        const data = await r.json().catch(() => ({}));
+        return json(r.status, data);
+      } catch {
+        return json(503, { error: 'agent unavailable' });
+      }
+    }
     // Voice input: proxy raw audio to Deepgram and return the transcript. The API
     // key lives only server-side (env.DEEPGRAM_KEY); the browser never sees it.
     // Returns { transcript, confidence, empty } — the client retries when empty
