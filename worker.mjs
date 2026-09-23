@@ -472,8 +472,31 @@ export class SessionHub {
       return json(200, { ok: true, imported: ids.length, ids });
     }
     if (p.startsWith('/web/stop/') && m === 'POST') {
-      const s = this.sessions.get(p.split('/').pop());
-      if (s) { s.status = 'idle'; await this.persist(s); }
+      const id = decodeURIComponent(p.split('/').pop());
+      const s = this.sessions.get(id);
+      if (s) {
+        // Local (imported / demo / web-created) session → just flip local state.
+        s.status = 'idle';
+        await this.persist(s);
+        return json(200, { ok: true });
+      }
+      // Not local → it's a REAL agent/Telegram session. Without this delegation
+      // the "Остановить выполнение" button silently did nothing for every real
+      // session (this.sessions never had them), so SIGTERM never reached the
+      // agent. Same fallback shape as /web/reply's delegation below.
+      if (AGENT_VERIFY && AGENT_VERIFY_SECRET) {
+        const username = await this.tokenUser(request);
+        const target = AGENT_VERIFY.replace(/\/web\/verify$/, '/web/stop-bearer');
+        try {
+          const r = await fetch(target, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${AGENT_VERIFY_SECRET}` },
+            body: JSON.stringify({ username, id }),
+          });
+          const data = await r.json().catch(() => ({}));
+          return json(r.status, data);
+        } catch { /* fall through to ok:true below — same as the old no-op behaviour */ }
+      }
       return json(200, { ok: true });
     }
     if (p === '/web/run' && m === 'POST') {

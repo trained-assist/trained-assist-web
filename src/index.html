@@ -126,14 +126,27 @@
           <div id="attach-hint" class="voice-status hidden" data-testid="attach-hint" role="status" aria-live="polite"></div>
           <div id="voice-status" class="voice-status hidden" data-testid="voice-status" role="status" aria-live="polite"></div>
           <div id="composer-notice" class="voice-status hidden" data-testid="composer-notice" role="status" aria-live="polite"></div>
-          <div class="reply-buttons">
+          <div id="reply-buttons" class="reply-buttons">
             <button class="btn btn-ghost" id="btn-attach" data-testid="attach-file" aria-label="Добавить файл">📎 Файл</button>
             <input type="file" id="attach-file" data-testid="file-input" multiple hidden>
             <button class="btn btn-ghost btn-mic" id="btn-mic" data-testid="mic-record" title="Dictate (voice input)" aria-label="Record voice">🎤 Voice</button>
             <button class="btn btn-primary hidden" id="btn-continue" data-testid="continue-session" title="Продолжить эту сессию">▷ Продолжай</button>
             <button class="btn btn-primary btn-send" id="btn-send" data-testid="send-reply">Отправить</button>
           </div>
-          <div class="stop-row"><button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session" title="Остановить выполнение">Остановить выполнение</button></div>
+          <div id="stop-row" class="stop-row">
+            <button class="btn btn-danger hidden" id="btn-stop" data-testid="stop-session" title="Остановить выполнение">Остановить выполнение</button>
+            <button class="btn btn-warn hidden" id="btn-supplement" data-testid="supplement-session" title="Остановить и перезапустить с текстом из поля ответа">✎ Дополнить</button>
+          </div>
+          <!-- Swapped in for stop-row/reply-buttons on Стоп/Дополнить click — see
+               spec-stop-supplement-confirm: neither action fires on the first
+               click, both require this explicit confirm step. -->
+          <div id="confirm-panel" class="confirm-panel hidden" data-testid="confirm-panel" role="alertdialog" aria-live="assertive">
+            <p id="confirm-text" data-testid="confirm-text"></p>
+            <div class="confirm-buttons">
+              <button class="btn btn-danger" id="btn-confirm-yes" data-testid="confirm-yes"></button>
+              <button class="btn btn-ghost" id="btn-confirm-cancel" data-testid="confirm-cancel"></button>
+            </div>
+          </div>
         </div>
       </aside>
     </div>

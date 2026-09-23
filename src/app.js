@@ -85,6 +85,45 @@ function showContinue(show) {
   $('btn-continue').classList.toggle('hidden', !show);
 }
 
+// Стоп and Дополнить only make sense while something is actually running —
+// Дополнить restarts a running task with extra context, so it has the same
+// visibility rule as Стоп (see spec-stop-supplement-confirm). One helper,
+// called wherever Стоп's visibility changes, keeps the two in sync.
+function showRunningControls(running) {
+  $('btn-stop').classList.toggle('hidden', !running);
+  $('btn-supplement').classList.toggle('hidden', !running);
+  if (!running) hideConfirmPanel();
+}
+
+// ─── Стоп/Дополнить confirm step ─────────────────────────────────────────────
+// Neither button acts on the first click — both swap the action row for an
+// explicit confirm (owner: accidental Стоп clicks were a real complaint).
+// See spec-stop-supplement-confirm.
+let confirmAction = null; // 'stop' | 'supplement' | null
+
+function showConfirmPanel(kind) {
+  confirmAction = kind;
+  $('reply-buttons').classList.add('hidden');
+  $('stop-row').classList.add('hidden');
+  if (kind === 'stop') {
+    $('confirm-text').textContent = 'Остановить текущую задачу? Прогресс не сохранится.';
+    $('btn-confirm-yes').textContent = 'Остановить';
+  } else {
+    const text = $('reply-input').value.trim();
+    $('confirm-text').textContent = `Остановить текущий прогон и перезапустить с этим текстом как дополнительным контекстом? «${text}»`;
+    $('btn-confirm-yes').textContent = 'Подтвердить и перезапустить';
+  }
+  $('btn-confirm-cancel').textContent = kind === 'supplement' ? 'Отмена — вернуться к тексту' : 'Отмена';
+  $('confirm-panel').classList.remove('hidden');
+}
+
+function hideConfirmPanel() {
+  confirmAction = null;
+  $('confirm-panel').classList.add('hidden');
+  $('reply-buttons').classList.remove('hidden');
+  $('stop-row').classList.remove('hidden');
+}
+
 // ─── Profile ────────────────────────────────────────────────────────────────
 // Show which profile is signed in, so an operator sharing this URL across
 // several profiles always knows whose sessions they're looking at. The server
@@ -255,8 +294,8 @@ async function loadSession(id) {
     '<div class="loading" style="padding:24px;justify-content:center"><div class="spinner"></div> Loading…</div>';
   $('stream-area').classList.add('hidden');
   $('activity-area').classList.add('hidden');
-  $('btn-stop').classList.add('hidden');
-  showContinue(false); // renderSession re-enables it once we know the status
+  showRunningControls(false); // renderSession re-enables it once we know the status
+  showContinue(false);
   clearInterval(pollTimer);
 
   try {
@@ -421,11 +460,11 @@ function renderSession(session) {
   decorateCodeBlocks(container);
 
   if (status === 'running') {
-    $('btn-stop').classList.remove('hidden');
+    showRunningControls(true);
     showContinue(false);
     startPolling(id);
   } else {
-    $('btn-stop').classList.add('hidden');
+    showRunningControls(false);
     showContinue(!!currentSessionId);
   }
 
@@ -473,7 +512,6 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
   streamAbort = controller;
 
   const streamEl = $('stream-area');
-  const btnStop  = $('btn-stop');
   const notice   = $('reconnect-notice');
 
   streaming = true;
@@ -493,7 +531,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
   streamEl.classList.remove('hidden');
   streamEl.className = 'stream-area active';
   streamEl.innerHTML = '<div class="loading"><div class="spinner"></div>Отправляю задачу…</div>';
-  btnStop.classList.remove('hidden');
+  showRunningControls(true);
   showContinue(false); // a stream is active — nothing to "continue" yet
 
   let buffer = '';
@@ -602,7 +640,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     clearInterval(activityTimer);
     if (streamAbort !== controller) return;
     $('activity-area').classList.add('hidden');
-    btnStop.classList.toggle('hidden', !sessionRunning);
+    showRunningControls(sessionRunning);
     streaming = false;
     updateSendLabel();
     // Only drop the `active` accent — leave `hidden` untouched. On `done` the
@@ -1057,7 +1095,7 @@ async function sendCreate() {
   $('messages-container').innerHTML = '';
   $('stream-area').classList.add('hidden');
   $('activity-area').classList.add('hidden');
-  $('btn-stop').classList.add('hidden');
+  showRunningControls(false);
   showContinue(false);
   updateSendLabel();
 
@@ -1327,9 +1365,32 @@ async function stopSession() {
   try {
     await api(`/web/stop/${encodeURIComponent(currentSessionId)}`, { method: 'POST' });
   } catch {}
-  $('btn-stop').classList.add('hidden');
+  showRunningControls(false);
   $('stream-area').classList.add('hidden');
   await loadSession(currentSessionId);
+}
+
+// ─── Дополнить ────────────────────────────────────────────────────────────────
+// SIGTERM the running task, then send the composer text as a normal reply —
+// an honest restart (a fresh process, not a resume) that inherits the
+// session's accumulated history plus this text as extra context. See
+// spec-stop-supplement-confirm.
+async function supplementSession() {
+  if (!currentSessionId) return;
+  const message = $('reply-input').value.trim();
+  if (!message) return;
+  if (streamAbort) streamAbort.abort();
+  clearInterval(pollTimer);
+  streaming = false;
+  sessionRunning = false;
+  updateSendLabel();
+  try {
+    await api(`/web/stop/${encodeURIComponent(currentSessionId)}`, { method: 'POST' });
+  } catch {}
+  showRunningControls(false);
+  $('stream-area').classList.add('hidden');
+  $('reply-input').value = '';
+  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message }, message);
 }
 
 // ─── Router ─────────────────────────────────────────────────────────────────
@@ -1445,7 +1506,18 @@ $('project-filter').addEventListener('change', e => {
 });
 
 $('btn-continue').addEventListener('click', continueSession);
-$('btn-stop').addEventListener('click', stopSession);
+$('btn-stop').addEventListener('click', () => showConfirmPanel('stop'));
+$('btn-supplement').addEventListener('click', () => {
+  if (!$('reply-input').value.trim()) return;
+  showConfirmPanel('supplement');
+});
+$('btn-confirm-yes').addEventListener('click', () => {
+  const action = confirmAction;
+  hideConfirmPanel();
+  if (action === 'stop') stopSession();
+  else if (action === 'supplement') supplementSession();
+});
+$('btn-confirm-cancel').addEventListener('click', hideConfirmPanel);
 
 $('btn-mic').addEventListener('click', () => toggleRecording());
 
