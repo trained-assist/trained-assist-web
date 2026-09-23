@@ -233,6 +233,8 @@ body {
 .btn-danger:hover:not(:disabled) { opacity: 0.85; }
 .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
 .btn-ghost:hover:not(:disabled) { background: var(--border); color: var(--text); }
+.btn-warn { background: var(--warning); color: #fff; }
+.btn-warn:hover:not(:disabled) { opacity: 0.85; }
 
 /* Form */
 input, textarea, select {
@@ -611,9 +613,15 @@ input:focus, textarea:focus, select:focus {
 .convo-title { white-space: normal; overflow-wrap: anywhere; overflow: visible; max-height: none; }
 .convo-header { flex-wrap: wrap; max-height: 35dvh; overflow-y: auto; }
 .composer-project, .session-project { overflow-wrap: anywhere; max-width: 100%; }
-.stop-row { flex-shrink: 0; }
+.stop-row { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
 .stop-row:has(button:not(.hidden)) { border-top: 1px solid var(--border); padding-top: 12px; }
 .stop-row .btn { width: 100%; justify-content: center; }
+
+/* Confirm panel: swapped in for reply-buttons/stop-row (see spec-stop-supplement-confirm) */
+.confirm-panel { flex-shrink: 0; border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.confirm-panel p { margin: 0; font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.confirm-buttons { display: flex; flex-direction: column; gap: 8px; }
+.confirm-buttons .btn { width: 100%; justify-content: center; }
 .reply-form { overflow-y: auto; }
 .folder-row { flex-wrap: wrap; }
 .folder-row select, .folder-row input { width: 100%; }

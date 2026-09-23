@@ -179,6 +179,48 @@ try {
   const stopBox=await page.getByTestId('stop-session').boundingBox();
   const sendBox=await page.getByTestId('send-reply').boundingBox();
   assert(stopBox.y > sendBox.y+sendBox.height,'stop below send');
+
+  // ── Стоп/Дополнить confirm step (spec-stop-supplement-confirm): neither
+  // button acts on the first click — both swap the action row for an explicit
+  // confirm, so an accidental click never kills a running task.
+  assert(await page.getByTestId('supplement-session').isVisible(),'Дополнить visible while running, like Стоп');
+  // Дополнить with an empty draft is a no-op — nothing to restart with.
+  await page.getByTestId('supplement-session').click();
+  assert(await page.getByTestId('confirm-panel').isHidden(),'Дополнить with empty input does not open confirm');
+  await page.getByTestId('reply-input').fill('доп. контекст для перезапуска');
+  await page.getByTestId('supplement-session').click();
+  assert(await page.getByTestId('confirm-panel').isVisible());
+  assert(await page.getByTestId('stop-session').isHidden(),'stop-row swapped out while confirming');
+  assert.match(await page.getByTestId('confirm-text').innerText(),/доп\. контекст для перезапуска/);
+  // Cancel returns to the normal row and keeps the typed text.
+  await page.getByTestId('confirm-cancel').click();
+  assert(await page.getByTestId('confirm-panel').isHidden());
+  assert(await page.getByTestId('stop-session').isVisible());
+  assert.equal(await page.getByTestId('reply-input').inputValue(),'доп. контекст для перезапуска');
+  // Confirm restarts: stop, then the typed text goes out as a normal reply.
+  const postsBeforeSupplement = posts;
+  await page.getByTestId('supplement-session').click();
+  await page.getByTestId('confirm-yes').click();
+  await page.waitForFunction(()=>document.getElementById('btn-supplement').classList.contains('hidden'),{timeout:3000});
+  assert.equal(posts,postsBeforeSupplement+1,'Дополнить sends exactly one reply, not one per click');
+  assert.equal(submissions.at(-1).message,'доп. контекст для перезапуска');
+  assert.equal(await page.getByTestId('reply-input').inputValue(),'','composer clears after a confirmed Дополнить');
+
+  // Стоп: same confirm gate, cancel leaves the task running, confirm stops it.
+  session.status='running';
+  await page.reload();
+  await page.waitForTimeout(2900);
+  await page.getByTestId('stop-session').click();
+  assert(await page.getByTestId('confirm-panel').isVisible());
+  assert.match(await page.getByTestId('confirm-text').innerText(),/Прогресс не сохранится/);
+  await page.getByTestId('confirm-cancel').click();
+  assert(await page.getByTestId('confirm-panel').isHidden());
+  assert(await page.getByTestId('stop-session').isVisible(),'cancel leaves the running task alone');
+  await page.getByTestId('stop-session').click();
+  await page.getByTestId('confirm-yes').click();
+  await page.waitForFunction(()=>document.getElementById('btn-stop').classList.contains('hidden'),{timeout:3000});
+  assert.equal(session.status,'completed','confirmed Стоп reached /web/stop');
+
   for (const width of [1440,1280,1024,390]) {
     await page.setViewportSize({width,height:844});
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`no overflow at ${width}`);
@@ -244,5 +286,5 @@ try {
   await page.getByTestId('reproject-close').click();
   await page.getByTestId('reproject-modal').waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);
-  console.log('PASS: sidebar create-panel (project create/retry, task prefix, draft survives close/reopen, isolated from reply draft); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert');
+  console.log('PASS: sidebar create-panel (project create/retry, task prefix, draft survives close/reopen, isolated from reply draft); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }
