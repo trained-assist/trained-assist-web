@@ -194,6 +194,46 @@ export class SessionHub {
     }
   }
 
+  // Copy browser-uploaded bytes from Durable Object storage into the agent's
+  // durable intake store before starting real work. The resulting hex ids are
+  // the fileRefs contract the agent materializes into media/intake.
+  async agentFileRefs(username, attachments) {
+    if (!Array.isArray(attachments) || !attachments.length) return { ok: true, fileRefs: [] };
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured' };
+    const target = base.replace(/\/web\/verify$/, '/web/intake-file-bearer');
+    const fileRefs = [];
+    for (const a of attachments) {
+      const stored = a && a.id ? await this.state.storage.get(`f:${a.id}`) : null;
+      if (!stored || !stored.b64) return { ok: false, status: 400, error: 'attachment bytes missing' };
+      const bytes = bufferFromB64(stored.b64);
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+      const id = [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
+      let r;
+      try {
+        r = await fetch(target, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${secret}`,
+            'x-username': username,
+            'x-file-id': id,
+            'x-filename': encodeURIComponent(stored.name || a.name || 'file'),
+            'content-type': stored.type || a.type || 'application/octet-stream',
+          },
+          body: bytes,
+        });
+      } catch {
+        return { ok: false, status: 503, error: 'agent attachment upload unavailable' };
+      }
+      if (r.status !== 200) {
+        const data = await r.json().catch(() => ({}));
+        return { ok: false, status: r.status || 502, error: data.error || 'agent attachment upload rejected' };
+      }
+      fileRefs.push({ id, name: stored.name || a.name || 'file', mime: stored.type || a.type || 'application/octet-stream' });
+    }
+    return { ok: true, fileRefs };
+  }
+
   // Write-side delegation. Never turn an upstream failure into a local demo
   // success when agent delegation is configured: the user must know the real
   // task did not start. Non-200 status/body are preserved as a JSON error.
@@ -519,10 +559,13 @@ export class SessionHub {
       // starts an actual agent task (streamed live), not a demo echo. Falls back to
       // the local demo session if delegation is off or the agent is unreachable.
       const username = await this.tokenUser(request);
+      const attachments = Array.isArray(b.attachments) ? b.attachments : [];
+      const uploaded = agentDelegation ? await this.agentFileRefs(username, attachments) : { ok: true, fileRefs: [] };
+      if (!uploaded.ok) return json(uploaded.status || 503, { error: uploaded.error || 'attachment upload failed' });
       const delegated = await this.agentTaskStream(username, '/web/run-bearer', {
         task: b.task || '',
         projectId: b.projectId || null,
-        attachments: Array.isArray(b.attachments) ? b.attachments : [],
+        fileRefs: uploaded.fileRefs,
       });
       if (delegated.ok) return delegated.response;
       if (agentDelegation) return json(delegated.status || 503, { error: delegated.error || 'agent unavailable' });
@@ -546,10 +589,13 @@ export class SessionHub {
       // Not local → it's a REAL agent/Telegram session (only ever read before, so a
       // reply 404'd and the message vanished). Delegate the write to the agent.
       const username = await this.tokenUser(request);
+      const attachments = Array.isArray(b.attachments) ? b.attachments : [];
+      const uploaded = await this.agentFileRefs(username, attachments);
+      if (!uploaded.ok) return json(uploaded.status || 503, { error: uploaded.error || 'attachment upload failed' });
       const delegated = await this.agentTaskStream(username, '/web/reply-bearer', {
         id,
         message: b.message || '',
-        attachments: Array.isArray(b.attachments) ? b.attachments : [],
+        fileRefs: uploaded.fileRefs,
       });
       if (delegated.ok) return delegated.response;
       return json(delegated.status || 503, { error: delegated.error || 'agent unavailable' });
