@@ -11,14 +11,34 @@ function hub() {
 const sse = () => new Response('data: {"type":"done","sessionId":"real-1"}\n\n',{status:200,headers:{'content-type':'text/event-stream'}});
 
 try {
-  // New session: exact profile/project/attachments contract is forwarded.
+  // New session: bytes are copied to agent intake first; run gets durable fileRefs.
   {
-    const h=hub(); let seen;
-    globalThis.fetch=async(url,opts)=>{seen={url,body:JSON.parse(opts.body)}; return sse();};
+    const h=hub(); let runSeen=null, uploadSeen=null;
+    h.state.storage.get=async key=>key==='f:f-1'
+      ? {id:'f-1',name:'cv.pdf',type:'application/pdf',size:4,b64:btoa('test')}
+      : undefined;
+    globalThis.fetch=async(url,opts)=>{
+      if (url.endsWith('/web/intake-file-bearer')) {
+        uploadSeen={url,headers:opts.headers,bytes:new Uint8Array(opts.body)};
+        return Response.json({ok:true});
+      }
+      runSeen={url,body:JSON.parse(opts.body)};
+      return sse();
+    };
     const res=await h.fetch(new Request('https://web.example/web/run',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({task:'hello',projectId:'p1',attachments:[{id:'f-1',name:'cv.pdf'}]})}));
-    assert.equal(res.status,200); assert.equal(seen.url,'https://agent.example/web/run-bearer');
-    assert.deepEqual(seen.body,{username:'alice',task:'hello',projectId:'p1',attachments:[{id:'f-1',name:'cv.pdf'}]});
+    assert.equal(res.status,200);
+    assert.equal(uploadSeen.url,'https://agent.example/web/intake-file-bearer');
+    assert.equal(uploadSeen.headers['x-username'],'alice');
+    assert.equal(uploadSeen.headers['content-type'],'application/pdf');
+    assert.equal(new TextDecoder().decode(uploadSeen.bytes),'test');
+    assert.equal(runSeen.url,'https://agent.example/web/run-bearer');
+    assert.equal(runSeen.body.username,'alice');
+    assert.equal(runSeen.body.task,'hello');
+    assert.equal(runSeen.body.projectId,'p1');
+    assert.equal(runSeen.body.fileRefs.length,1);
+    assert.match(runSeen.body.fileRefs[0].id,/^[a-f0-9]{64}$/);
+    assert.equal(runSeen.body.fileRefs[0].name,'cv.pdf');
   }
 
   // Upstream rejection and outage are visible; never replaced by local demo success.
@@ -30,6 +50,15 @@ try {
     const res=await h.fetch(new Request('https://web.example/web/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({task:'hello'})}));
     assert.equal(res.status, mode==='reject'?409:503);
     assert.equal(h.sessions.size,0,'failed real run must not create a local demo session');
+  }
+
+  // A metadata ref without bytes must fail before the agent task starts.
+  {
+    const h=hub(); let calls=0; globalThis.fetch=async()=>{calls++;return sse();};
+    const res=await h.fetch(new Request('https://web.example/web/run',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({task:'hello',attachments:[{id:'missing',name:'lost.pdf'}]})}));
+    assert.equal(res.status,400); assert.equal(calls,0);
+    assert.match((await res.json()).error,/bytes missing/);
   }
 
   // Reply preserves upstream error instead of collapsing into local 404.
@@ -46,5 +75,5 @@ try {
     assert.equal(res.status,503); assert.match((await res.json()).error,/agent unavailable/);
   }
 
-  console.log('PASS: worker→agent create/reply/read contracts fail closed and preserve project/attachment metadata');
+  console.log('PASS: worker→agent create/reply/read contracts fail closed; web attachment bytes are durably bridged before task start');
 } finally { globalThis.fetch=savedFetch; }
