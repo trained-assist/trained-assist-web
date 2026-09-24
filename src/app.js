@@ -258,11 +258,22 @@ let projectsReady = false;
 
 function rememberDraft() {
   if (!draftDestination) return;
+  const prev = composerDrafts.get(draftDestination) || {};
   composerDrafts.set(draftDestination, {
     message: $('reply-input').value,
     attachments: pendingAttachments.slice(),
     project: draftDestination === 'new' ? $('folder-select').value : undefined,
+    requestId: prev.requestId || null,
   });
+}
+
+function ensureDraftRequestId(destination) {
+  const draft = composerDrafts.get(destination) || { message: '', attachments: [] };
+  if (!draft.requestId) {
+    draft.requestId = (globalThis.crypto?.randomUUID?.() || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    composerDrafts.set(destination, draft);
+  }
+  return draft.requestId;
 }
 
 function applyComposerMode() {
@@ -605,6 +616,24 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
+        if (res.status === 409 && d.duplicate) {
+          delivered = true; // same mutation was already durably accepted upstream
+          clearInterval(activityTimer);
+          $('activity-area').classList.add('hidden');
+          notice.classList.remove('hidden');
+          notice.textContent = d.state === 'done'
+            ? 'Эта отправка уже была принята и завершена — повторно не запускаю.'
+            : 'Эта отправка уже принята агентом — повторно не запускаю.';
+          if (d.sessionId) {
+            currentSessionId = d.sessionId;
+            navigate(`/session/${d.sessionId}`, false);
+            await loadSession(d.sessionId);
+          } else {
+            await loadSessions();
+            streamEl.innerHTML = '<div class="loading" role="status">Задача уже принята агентом. Обновляю список сессий…</div>';
+          }
+          return;
+        }
         throw new Error(d.error || `HTTP ${res.status}`);
       }
 
@@ -1102,6 +1131,7 @@ async function sendMessage() {
   const message = $('reply-input').value.trim();
   if (!message && !pendingAttachments.length) return;
   rememberDraft();
+  const requestId = ensureDraftRequestId(destination);
   const files = pendingAttachments.slice();
   const project = isNew ? $('folder-select').value : null;
   dispatching = true;
@@ -1130,14 +1160,15 @@ async function sendMessage() {
       showRunningControls(false);
       showContinue(false);
       const task = project ? `[Work in folder: ${project}]\n\n${message}` : message;
-      delivered = await startStream('/web/run', { task, projectId: project || null, attachments }, message, attachments);
+      delivered = await startStream('/web/run', { task, projectId: project || null, attachments, requestId }, message, attachments);
     } else {
       delivered = await startStream(`/web/reply/${encodeURIComponent(destination)}`,
-        {message, attachments}, message, attachments);
+        {message, attachments, requestId}, message, attachments);
     }
 
     if (!delivered) {
-      const draft = composerDrafts.get(destination) || {message: '', attachments: [], project};
+      const draft = composerDrafts.get(destination) || {message: '', attachments: [], project, requestId};
+      draft.requestId = requestId;
       draft.message = [message, draft.message].filter(Boolean).join('\n\n');
       draft.attachments = [...files, ...(draft.attachments || [])];
       if (isNew) draft.project = project;
@@ -1152,6 +1183,13 @@ async function sendMessage() {
     } else {
       files.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl));
       if (isNew) composerDrafts.delete('new');
+      else {
+        const draft = composerDrafts.get(destination) || {};
+        draft.requestId = null;
+        draft.message = '';
+        draft.attachments = [];
+        composerDrafts.set(destination, draft);
+      }
     }
   } catch (err) {
     if (draftDestination === destination) setAttachHint(`Не удалось отправить: ${err.message}. Черновик сохранён.`, 'error');
