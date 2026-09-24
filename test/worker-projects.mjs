@@ -13,7 +13,7 @@ try {
   assert.equal((await hub.fetch(req())).status,502);
   globalThis.fetch=async(url,opts)=>{assert.equal(JSON.parse(opts.body).username,'owner');return Response.json({projects:[{id:'generic-new',name:'New'}]})};
   assert.deepEqual(await (await hub.fetch(req())).json(),{tree:[{path:'generic-new',name:'New'}]});
-  hub.agentSessions=async()=>[{id:'s1',summary:{title:'Meaningful title',gist:'Summary'},projectId:'generic-new'}];
+  hub.agentSessions=async()=>({ok:true,status:200,sessions:[{id:'s1',summary:{title:'Meaningful title',gist:'Summary'},projectId:'generic-new'}]});
   const sessions=await (await hub.fetch(new Request('https://web.example/web/sessions'))).json();
   assert.equal(sessions[0].summary.gist,'Summary');assert.equal(sessions[0].title,'Meaningful title');assert.equal(sessions[0].projectId,'generic-new');
   console.log('PASS: worker project errors, profile delegation, folder mapping, summary forwarding');
