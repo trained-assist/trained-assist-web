@@ -714,7 +714,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     // stream text a second time below the persisted message. On error the area
     // stays visible (we never set hidden) so the error remains readable.
     streamEl.classList.remove('active');
-    notice.classList.add('hidden');
+    if (!delivered) notice.classList.add('hidden');
     // Stream is over (done reloads via loadSession; error stays here) — offer
     // Continue again so the user can nudge a stalled/errored session forward.
     showContinue(!!currentSessionId && !sessionRunning);
