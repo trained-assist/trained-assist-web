@@ -247,41 +247,77 @@ let streamAbort = null;
 let pollTimer = null;
 let streaming = false; // true whenever a run/reply request is in flight
 
-// Reply drafts belong to a session; switching sessions never sends or
-// discards them. (New-session drafts live in #create-panel's own state —
-// see "Sidebar: new session" below — since that panel isn't a navigation
-// destination.)
+// One physical composer serves New Session and Reply. Draft state is keyed by
+// destination, so shared controls never imply shared content.
 const composerDrafts = new Map();
-let draftDestination = null;
+let draftDestination = null; // 'new' | session id | null
+let composerMode = 'reply';
 let sessionRunning = false;
 let dispatching = false;
+let projectsReady = false;
+
 function rememberDraft() {
   if (!draftDestination) return;
   composerDrafts.set(draftDestination, {
-    message: $('reply-input').value, attachments: pendingAttachments.slice(),
+    message: $('reply-input').value,
+    attachments: pendingAttachments.slice(),
+    project: draftDestination === 'new' ? $('folder-select').value : undefined,
   });
 }
+
+function applyComposerMode() {
+  const isNew = composerMode === 'new';
+  $('composer-label').textContent = isNew ? 'Новая сессия' : 'Ответ в сессию';
+  $('new-session-project').classList.toggle('hidden', !isNew);
+  if (isNew) {
+    $('composer-project').classList.add('hidden');
+    showRunningControls(false);
+    showContinue(false);
+  }
+  updateSendLabel();
+}
+
 function openDraft(destination) {
-  if (destination === draftDestination) return;
+  if (destination === draftDestination) {
+    composerMode = destination === 'new' ? 'new' : 'reply';
+    applyComposerMode();
+    return;
+  }
   rememberDraft();
   draftDestination = destination;
+  composerMode = destination === 'new' ? 'new' : 'reply';
   const draft = composerDrafts.get(destination);
   $('reply-input').value = draft?.message || '';
   pendingAttachments = draft?.attachments?.slice() || [];
   renderAttachments();
   setAttachHint('');
+  applyComposerMode();
 }
+
 function updateSendLabel() {
-  const busy = streaming || sessionRunning || dispatching;
-  $('btn-send').textContent = busy ? 'Выполняется…' : 'Отправить';
-  $('btn-send').disabled = busy || !currentSessionId;
+  const isNew = composerMode === 'new';
+  const busy = streaming || dispatching || (!isNew && sessionRunning);
+  $('btn-send').textContent = busy ? 'Выполняется…' : isNew ? 'Начать' : 'Отправить';
+  $('btn-send').disabled = busy || (isNew ? !projectsReady : !draftDestination);
   const notice = $('composer-notice');
   notice.textContent = busy ? 'Можно подготовить следующий ответ. Отправка станет доступна после завершения.' : '';
   notice.classList.toggle('hidden', !busy);
 }
 
+function startNewSessionMode() {
+  if (voiceBusy || recording) return;
+  openDraft('new');
+  showConvo(true);
+  const draft = composerDrafts.get('new');
+  loadNewSessionFolders(draft?.project || projectFilter);
+  $('reply-input').focus();
+}
+
+function cancelNewSessionMode() {
+  openDraft(currentSessionId || null);
+  showConvo(!!currentSessionId);
+}
 async function loadSession(id) {
-  closeCreatePanel();
   openDraft(id);
   sessionRunning = false;
   currentSessionId = id;
@@ -531,7 +567,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
   streamEl.classList.remove('hidden');
   streamEl.className = 'stream-area active';
   streamEl.innerHTML = '<div class="loading"><div class="spinner"></div>Отправляю задачу…</div>';
-  showRunningControls(true);
+  showRunningControls(composerMode === 'reply');
   showContinue(false); // a stream is active — nothing to "continue" yet
 
   let buffer = '';
@@ -640,7 +676,7 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     clearInterval(activityTimer);
     if (streamAbort !== controller) return;
     $('activity-area').classList.add('hidden');
-    showRunningControls(sessionRunning);
+    showRunningControls(composerMode === 'reply' && sessionRunning);
     streaming = false;
     updateSendLabel();
     // Only drop the `active` accent — leave `hidden` untouched. On `done` the
@@ -702,69 +738,32 @@ async function importFiles(fileList) {
   setTimeout(() => banner.remove(), 4000);
 }
 
-// ─── Sidebar: new session ─────────────────────────────────────────────────
-// "+ New" opens a small self-contained panel in the sidebar (project picker,
-// task textarea, attachments) instead of putting the reply composer into a
-// "compose" mode. The old design routed creation through a composingNew flag
-// and a '/new' hash so it could reuse the reply box — but that made the
-// composer a shared destination between "new session" and "reply to
-// session", and every navigation race between the two (#26, #28) was a
-// symptom of that sharing, not of routing per se. This panel isn't a
-// navigation destination and shares no state with the reply composer, so
-// that whole bug class doesn't apply here. Cancel just hides it — the
-// draft (project/text/attachments) stays in its DOM until Send, so
-// reopening "+ New" restores it for free.
-let createOpen = false;
-let createBusy = false;
-let createProjectsReady = false;
-
-function updateCreateSendState() {
-  $('btn-create-send').disabled = createBusy || !createProjectsReady;
-  $('btn-create-send').textContent = createBusy ? 'Выполняется…' : 'Начать';
-}
-
-function openCreatePanel() {
-  if (voiceBusy || recording) return;
-  createOpen = true;
-  $('create-panel').classList.remove('hidden');
-  loadNewSessionFolders($('folder-select').value || projectFilter);
-  $('create-input').focus();
-}
-function closeCreatePanel() {
-  if (!createOpen) return;
-  createOpen = false;
-  $('create-panel').classList.add('hidden');
-}
-
-// Populate the project-folder select from the agent's project list. `selectPath`
-// pre-selects a project id (used right after creating one).
+// ─── New-session project controls for the shared right-rail composer ─────────
 async function loadNewSessionFolders(selectPath) {
-  createProjectsReady = false;
-  updateCreateSendState();
+  projectsReady = false;
+  updateSendLabel();
   const sel = $('folder-select');
-  selectPath ||= sel.value;
+  selectPath ||= composerDrafts.get('new')?.project || sel.value;
   sel.innerHTML = '<option value="">Loading folders…</option>';
-  sel.disabled  = true;
+  sel.disabled = true;
   try {
-    const res  = await api('/web/files/tree');
+    const res = await api('/web/files/tree');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Project list unavailable');
     const tree = data.tree || [];
     renderProjects(tree);
-    if (!tree.length) {
-      sel.innerHTML = '<option value="">No folders available</option>';
-    } else {
-      sel.innerHTML = '<option value="">No project (optional)</option>' +
-        tree.map(f => `<option value="${esc(f.path)}">${esc(f.name)}</option>`).join('');
-      sel.disabled = false;
-      if (selectPath) sel.value = selectPath;
-    }
-    createProjectsReady = true;
-    updateCreateSendState();
+    sel.innerHTML = '<option value="">No project (optional)</option>' +
+      tree.map(f => `<option value="${esc(f.path)}">${esc(f.name)}</option>`).join('');
+    sel.disabled = false;
+    if (selectPath && tree.some(f => f.path === selectPath)) sel.value = selectPath;
+    projectsReady = true;
+    rememberDraft();
+    updateSendLabel();
     return true;
   } catch {
-    setCreateHint('Не удалось загрузить проекты. Нажмите «+ New», чтобы повторить.', 'error');
+    setAttachHint('Не удалось загрузить проекты. Повторно откройте «Новая сессия».', 'error');
     sel.innerHTML = '<option value="">Failed to load folders</option>';
+    updateSendLabel();
     return false;
   }
 }
@@ -821,8 +820,9 @@ async function createProject() {
       sel.disabled = false;
       sel.value = data.project.id;
     }
-    createProjectsReady = true;
-    updateCreateSendState();
+    projectsReady = true;
+    rememberDraft();
+    updateSendLabel();
     const notice = $('project-notice');
     notice.textContent = `Проект «${data.project.name}» создан и выбран. ${loaded ? '' : 'Список временно недоступен.'}`;
     notice.classList.remove('hidden');
@@ -1009,117 +1009,6 @@ async function revertReproject() {
   }
 }
 
-// Staged attachments for the create-panel — the same stage-then-upload-on-
-// submit pattern as the reply composer's pendingAttachments (see below), but
-// a separate array/DOM so the two composers never share state.
-let createAttachments = []; // { file, name, size, type, localUrl }
-
-function setCreateHint(text, kind = '') {
-  const el = $('create-hint');
-  if (!text) { el.classList.add('hidden'); el.textContent = ''; return; }
-  el.classList.remove('hidden');
-  el.className = `voice-status${kind ? ' voice-' + kind : ''}`;
-  el.textContent = text;
-}
-
-function renderCreateAttachments() {
-  const el = $('create-attachments');
-  if (!createAttachments.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
-  el.classList.remove('hidden');
-  el.innerHTML = createAttachments.map((a, i) => `
-    <div class="attach-chip" data-testid="create-attach-chip" data-idx="${i}">
-      ${a.localUrl
-        ? `<img class="attach-thumb" src="${a.localUrl}" alt="">`
-        : `<span class="attach-icon">📄</span>`}
-      <span class="attach-name">${esc(a.name)}</span>
-      <span class="attach-size">${esc(fmtSize(a.size))}</span>
-      <button class="attach-remove" data-testid="create-attach-remove" data-idx="${i}" aria-label="Remove ${esc(a.name)}" title="Remove">✕</button>
-    </div>`).join('');
-  el.querySelectorAll('.attach-remove').forEach(b =>
-    b.addEventListener('click', () => {
-      const a = createAttachments[+b.dataset.idx];
-      if (a && a.localUrl) URL.revokeObjectURL(a.localUrl);
-      createAttachments.splice(+b.dataset.idx, 1);
-      renderCreateAttachments();
-    }));
-}
-
-function addCreateFiles(fileList) {
-  const files = [...(fileList || [])];
-  let skipped = 0;
-  for (const f of files) {
-    if (f.size > MAX_ATTACH) { skipped++; continue; }
-    const type = f.type || 'application/octet-stream';
-    createAttachments.push({
-      file: f,
-      name: f.name || (type.startsWith('image/') ? `screenshot.${(type.split('/')[1] || 'png')}` : 'file'),
-      size: f.size,
-      type,
-      localUrl: type.startsWith('image/') ? URL.createObjectURL(f) : null,
-    });
-  }
-  renderCreateAttachments();
-  if (skipped) setCreateHint(`${skipped} file(s) skipped — max 3MB each`, 'error');
-  else if (files.length) setCreateHint(`${createAttachments.length} attachment(s) ready`, 'ok');
-}
-
-async function sendCreate() {
-  if (voiceBusy || recording) return;
-  if (createBusy || !createProjectsReady) return;
-  const message = $('create-input').value.trim();
-  if (!message && !createAttachments.length) return;
-  const project = $('folder-select').value;
-  const files = createAttachments.slice();
-  createBusy = true;
-  updateCreateSendState();
-
-  // Reset the center/right panes into an empty session view so startStream()
-  // (below) has somewhere to render "You: <message>" and live progress into
-  // while the backend works out a session id — the same elements a loaded
-  // session uses, just not attached to any id yet.
-  if (streamAbort) streamAbort.abort();
-  streamAbort = null;
-  clearInterval(pollTimer);
-  sessionRunning = false;
-  currentSessionId = null;
-  streaming = false;
-  // openDraft (not a direct reset) so an unsent reply typed for the session
-  // we're leaving gets saved to composerDrafts instead of silently dropped.
-  openDraft(null);
-  showConvo(true);
-  highlightActive(null);
-  $('session-title').textContent = 'Новая сессия';
-  $('session-status').innerHTML = '';
-  $('session-project-badge').classList.add('hidden');
-  $('composer-project').classList.add('hidden');
-  $('messages-container').innerHTML = '';
-  $('stream-area').classList.add('hidden');
-  $('activity-area').classList.add('hidden');
-  showRunningControls(false);
-  showContinue(false);
-  updateSendLabel();
-
-  try {
-    const attachments = await uploadFiles(files);
-    $('create-input').value = '';
-    createAttachments.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl));
-    createAttachments = [];
-    renderCreateAttachments();
-    closeCreatePanel();
-    const task = project ? `[Work in folder: ${project}]\n\n${message}` : message;
-    // startStream navigates into the real session once the backend returns a
-    // sessionId (see its `done` handler) — same path an existing session's
-    // reply takes, so there's no separate "new session" outcome to keep in
-    // sync with.
-    await startStream('/web/run', { task, attachments }, message, attachments);
-  } catch (err) {
-    setCreateHint(`Не удалось отправить: ${err.message}. Черновик сохранён.`, 'error');
-  } finally {
-    createBusy = false;
-    updateCreateSendState();
-  }
-}
-
 // ─── File attachments (drag-drop / paste) ────────────────────────────────────
 // UX: dropping or pasting files just *stages* them as chips next to the reply —
 // nothing is uploaded yet, so the user can add/remove before committing. The
@@ -1207,37 +1096,63 @@ async function uploadFiles(list) {
 // Submission snapshots its destination before any asynchronous upload.
 async function sendMessage() {
   if (voiceBusy || recording) { setVoiceStatus('Остановите запись и дождитесь расшифровки', 'busy'); return; }
-  if (streaming || sessionRunning || dispatching || !currentSessionId) return;
+  const destination = draftDestination;
+  const isNew = destination === 'new';
+  if (streaming || dispatching || (!isNew && (sessionRunning || !destination)) || (isNew && !projectsReady)) return;
   const message = $('reply-input').value.trim();
   if (!message && !pendingAttachments.length) return;
   rememberDraft();
-  const destination = draftDestination;
   const files = pendingAttachments.slice();
+  const project = isNew ? $('folder-select').value : null;
   dispatching = true;
   updateSendLabel();
   try {
     const attachments = await uploadFiles(files);
-    // A navigation during upload retains the source draft for an explicit send.
     if (draftDestination !== destination) return;
+
     $('reply-input').value = '';
     pendingAttachments = [];
     renderAttachments();
     rememberDraft();
-    const delivered = await startStream(`/web/reply/${encodeURIComponent(destination)}`,
-      {message, attachments}, message, attachments);
+
+    let delivered;
+    if (isNew) {
+      currentSessionId = null;
+      sessionRunning = false;
+      showConvo(true);
+      highlightActive(null);
+      $('session-title').textContent = 'Новая сессия';
+      $('session-status').innerHTML = '';
+      $('session-project-badge').classList.add('hidden');
+      $('messages-container').innerHTML = '';
+      $('stream-area').classList.add('hidden');
+      $('activity-area').classList.add('hidden');
+      showRunningControls(false);
+      showContinue(false);
+      const task = project ? `[Work in folder: ${project}]\n\n${message}` : message;
+      delivered = await startStream('/web/run', { task, attachments }, message, attachments);
+    } else {
+      delivered = await startStream(`/web/reply/${encodeURIComponent(destination)}`,
+        {message, attachments}, message, attachments);
+    }
+
     if (!delivered) {
-      if (draftDestination === destination) rememberDraft();
-      const draft = composerDrafts.get(destination) || {message: '', attachments: []};
+      const draft = composerDrafts.get(destination) || {message: '', attachments: [], project};
       draft.message = [message, draft.message].filter(Boolean).join('\n\n');
-      draft.attachments = [...files, ...draft.attachments];
+      draft.attachments = [...files, ...(draft.attachments || [])];
+      if (isNew) draft.project = project;
       composerDrafts.set(destination, draft);
       if (draftDestination === destination) {
         $('reply-input').value = draft.message;
         pendingAttachments = draft.attachments.slice();
+        if (isNew && project) $('folder-select').value = project;
         renderAttachments();
         setAttachHint('Подтверждение не получено. Черновик сохранён; проверьте историю перед повторной отправкой.', 'error');
       }
-    } else files.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl));
+    } else {
+      files.forEach(a => a.localUrl && URL.revokeObjectURL(a.localUrl));
+      if (isNew) composerDrafts.delete('new');
+    }
   } catch (err) {
     if (draftDestination === destination) setAttachHint(`Не удалось отправить: ${err.message}. Черновик сохранён.`, 'error');
   } finally {
@@ -1256,6 +1171,7 @@ let mediaRecorder = null;
 let recordChunks = [];
 let recording = false;
 let voiceBusy = false;
+let recordingDestination = null;
 const voiceButton = () => $('btn-mic');
 
 function setVoiceStatus(text, kind = '') {
@@ -1270,6 +1186,8 @@ function setVoiceStatus(text, kind = '') {
 async function toggleRecording() {
   if (recording) { stopRecording(); return; }
   if (voiceBusy) return;
+  rememberDraft();
+  const requestedDestination = draftDestination;
   const btn = voiceButton();
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     setVoiceStatus('Voice input not supported in this browser', 'error');
@@ -1292,9 +1210,11 @@ async function toggleRecording() {
   mediaRecorder.addEventListener('stop', async () => {
     stream.getTracks().forEach(t => t.stop());
     const blob = new Blob(recordChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-    try { await transcribeBlob(blob); } finally { voiceBusy = false; }
+    const target = recordingDestination;
+    try { await transcribeBlob(blob, 0, target); } finally { voiceBusy = false; recordingDestination = null; }
   });
   mediaRecorder.start();
+  recordingDestination = requestedDestination;
   recording = true;
   btn.classList.add('recording');
   btn.textContent = '⏹ Stop';
@@ -1315,7 +1235,7 @@ function stopRecording() {
   btn.textContent = '🎤 Voice';
 }
 
-async function transcribeBlob(blob, attempt = 0) {
+async function transcribeBlob(blob, attempt = 0, destination = recordingDestination) {
   const input = $('reply-input');
   setVoiceStatus(attempt ? `Transcribing… (retry ${attempt})` : 'Transcribing…', 'busy');
   try {
@@ -1328,16 +1248,21 @@ async function transcribeBlob(blob, attempt = 0) {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     if (data.empty || !data.transcript) {
       // Deepgram swallowed it — retry the same audio once before giving up.
-      if (attempt < 1) return transcribeBlob(blob, attempt + 1);
+      if (attempt < 1) return transcribeBlob(blob, attempt + 1, destination);
       setVoiceStatus("Didn't catch that — try recording again", 'error');
       return;
     }
-    // Append to the existing draft so dictation can add to typed text.
-    const sep = input.value && !/\s$/.test(input.value) ? ' ' : '';
-    input.value = input.value + sep + data.transcript;
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-    setVoiceStatus('✓ Transcribed — review & Send', 'ok');
+    if (!destination) return;
+    const draft = composerDrafts.get(destination) || {message: '', attachments: []};
+    const sep = draft.message && !/\s$/.test(draft.message) ? ' ' : '';
+    draft.message = (draft.message || '') + sep + data.transcript;
+    composerDrafts.set(destination, draft);
+    if (draftDestination === destination) {
+      input.value = draft.message;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      setVoiceStatus('✓ Transcribed — review & Send', 'ok');
+    }
 
   } catch (err) {
     if (err.message !== 'Unauthorized') setVoiceStatus(`Transcription failed: ${err.message}`, 'error');
@@ -1394,8 +1319,8 @@ async function supplementSession() {
 }
 
 // ─── Router ─────────────────────────────────────────────────────────────────
-// Only ever session ids now — creating a session isn't a navigation
-// destination (see "Sidebar: new session" above), so there's no '/new' case.
+// New-session mode is composer state, not a route. Routes identify persisted
+// sessions only, keeping async navigation separate from the compose target.
 function destinationForPath(path) {
   if (path.startsWith('/session/')) return path.slice('/session/'.length) || null;
   return null;
@@ -1409,7 +1334,7 @@ function navigate(path, pushState = true) {
   if (pushState) {
     // Setting `location.hash` to the value it already has is a no-op — the
     // browser does not fire `hashchange` — so re-clicking the already-active
-    // session (e.g. to close the create-panel and jump back to it) would
+    // session (e.g. to re-open the already-active session) would
     // otherwise silently skip route() and every side effect it drives.
     const samePath = location.hash.slice(1) === path;
     location.hash = path;
@@ -1465,18 +1390,9 @@ async function route() {
 }
 
 // ─── Event listeners ────────────────────────────────────────────────────────
-$('btn-new').addEventListener('click', () => (createOpen ? closeCreatePanel() : openCreatePanel()));
-$('btn-create-cancel').addEventListener('click', closeCreatePanel);
-$('btn-create-send').addEventListener('click', sendCreate);
-$('create-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendCreate(); }
-});
-$('btn-create-attach').addEventListener('click', () => $('create-attach-file').click());
-$('create-attach-file').addEventListener('change', e => { addCreateFiles(e.target.files); e.target.value = ''; });
-$('create-input').addEventListener('paste', e => {
-  const files = e.clipboardData && e.clipboardData.files;
-  if (files && files.length) { e.preventDefault(); addCreateFiles(files); }
-});
+$('btn-new').addEventListener('click', startNewSessionMode);
+$('btn-cancel-new').addEventListener('click', cancelNewSessionMode);
+$('folder-select').addEventListener('change', rememberDraft);
 
 $('btn-import').addEventListener('click', () => $('import-file').click());
 $('import-file').addEventListener('change', e => importFiles(e.target.files));
@@ -1552,10 +1468,9 @@ window.addEventListener('drop', e => {
   e.preventDefault();
   dragDepth = 0;
   dropOverlay.classList.add('hidden');
-  // Files dropped anywhere go to whichever composer is actually active: the
-  // create panel while it's open, otherwise the reply box.
-  if (createOpen) addCreateFiles(e.dataTransfer.files);
-  else addFiles(e.dataTransfer.files);
+  // There is exactly one composer; its current draft destination owns the drop.
+  addFiles(e.dataTransfer.files);
+  rememberDraft();
 });
 $('reply-input').addEventListener('paste', e => {
   const files = e.clipboardData && e.clipboardData.files;
