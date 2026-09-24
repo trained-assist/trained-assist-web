@@ -53,8 +53,13 @@ const server = createServer(async (req,res) => {
   if(req.url.startsWith('/web/stop/')) {session.status='completed';return json({ok:true});}
   if(req.url === '/web/transcribe') return json({transcript:'Проверить голосовую задачу'});
   if(req.url === '/web/run' || req.url.startsWith('/web/reply/')) {
-    const chunks=[];for await (const chunk of req) chunks.push(chunk);submissions.push(JSON.parse(Buffer.concat(chunks)));
-    posts++; res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: {}\n\n');
+    const chunks=[];for await (const chunk of req) chunks.push(chunk);
+    const submission=JSON.parse(Buffer.concat(chunks));submissions.push(submission);posts++;
+    if (streamMode === 'duplicate') return json({
+      error:'duplicate request already accepted',duplicate:true,requestId:submission.requestId,
+      state:'done',sessionId:'real-session'
+    },409);
+    res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: {}\n\n');
     const timer=setTimeout(()=>res.end(streamMode === 'drop' ? '' : 'data: {"type":"done","sessionId":"real-session"}\n\n'),1500);
     res.on('close',()=>clearTimeout(timer));return;
   }
@@ -108,6 +113,7 @@ try {
   assert.match(submissions[0].task,/Work in folder: generic-new/);
   assert.match(submissions[0].task,/Новая задача с проектом/);
   assert.equal(submissions[0].attachments.length,1);
+  assert.match(submissions[0].requestId,/^[0-9a-z-]+$/i,'New gets a stable mutation id');
 
   await page.getByTestId('new-session').click();
   await page.getByTestId('reply-input').fill('Черновик новой сессии');
@@ -163,6 +169,18 @@ try {
   await page.getByTestId('attach-hint').filter({hasText:'Подтверждение не получено'}).waitFor();
   assert.equal(posts,3);
   assert.equal(await page.getByTestId('reply-input').inputValue(),'Ответ при обрыве');
+  const droppedRequestId=submissions.at(-1).requestId;
+  assert.match(droppedRequestId,/^[0-9a-z-]+$/i);
+
+  // Manual retry reuses the SAME mutation id. Upstream says it was already
+  // accepted; UI must not invent a new mutation or restore the draft again.
+  streamMode='duplicate';
+  await page.getByTestId('send-reply').click();
+  await page.waitForFunction(()=>location.hash.includes('real-session'));
+  assert.equal(submissions.at(-1).requestId,droppedRequestId,'retry reuses the original requestId');
+  assert.match(await page.getByTestId('reconnect-notice').innerText(),/повторно не запускаю/);
+  streamMode='done';
+
   session.status='running';
   await page.reload();
   await page.waitForTimeout(2900);
