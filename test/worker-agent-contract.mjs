@@ -26,7 +26,7 @@ try {
       return sse();
     };
     const res=await h.fetch(new Request('https://web.example/web/run',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({task:'hello',projectId:'p1',attachments:[{id:'f-1',name:'cv.pdf'}]})}));
+      body:JSON.stringify({task:'hello',projectId:'p1',requestId:'req-new-1',attachments:[{id:'f-1',name:'cv.pdf'}]})}));
     assert.equal(res.status,200);
     assert.equal(uploadSeen.url,'https://agent.example/web/intake-file-bearer');
     assert.equal(uploadSeen.headers['x-username'],'alice');
@@ -36,6 +36,7 @@ try {
     assert.equal(runSeen.body.username,'alice');
     assert.equal(runSeen.body.task,'hello');
     assert.equal(runSeen.body.projectId,'p1');
+    assert.equal(runSeen.body.requestId,'req-new-1');
     assert.equal(runSeen.body.fileRefs.length,1);
     assert.match(runSeen.body.fileRefs[0].id,/^[a-f0-9]{64}$/);
     assert.equal(runSeen.body.fileRefs[0].name,'cv.pdf');
@@ -59,6 +60,26 @@ try {
       body:JSON.stringify({task:'hello',attachments:[{id:'missing',name:'lost.pdf'}]})}));
     assert.equal(res.status,400); assert.equal(calls,0);
     assert.match((await res.json()).error,/bytes missing/);
+  }
+
+  // Agent duplicate response is preserved all the way to the browser so UI can
+  // treat a retry as already accepted instead of inventing a fresh mutation.
+  {
+    const h=hub();
+    globalThis.fetch=async()=>Response.json({
+      error:'duplicate request already accepted',duplicate:true,requestId:'req-dup',
+      state:'done',sessionId:'real-1'
+    },{status:409});
+    const res=await h.fetch(new Request('https://web.example/web/reply/real-1',{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({message:'continue',requestId:'req-dup'})
+    }));
+    assert.equal(res.status,409);
+    const data=await res.json();
+    assert.equal(data.duplicate,true);
+    assert.equal(data.requestId,'req-dup');
+    assert.equal(data.state,'done');
+    assert.equal(data.sessionId,'real-1');
   }
 
   // Reply preserves upstream error instead of collapsing into local 404.

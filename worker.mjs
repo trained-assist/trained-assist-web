@@ -253,7 +253,7 @@ export class SessionHub {
     }
     if (r.status !== 200 || !r.body) {
       const data = await r.json().catch(() => ({}));
-      return { ok: false, status: r.status || 502, error: data.error || 'agent task rejected' };
+      return { ok: false, status: r.status || 502, error: data.error || 'agent task rejected', data };
     }
     return { ok: true, response: new Response(r.body, { headers: {
       'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } }) };
@@ -566,9 +566,10 @@ export class SessionHub {
         task: b.task || '',
         projectId: b.projectId || null,
         fileRefs: uploaded.fileRefs,
+        requestId: b.requestId || null,
       });
       if (delegated.ok) return delegated.response;
-      if (agentDelegation) return json(delegated.status || 503, { error: delegated.error || 'agent unavailable' });
+      if (agentDelegation) return json(delegated.status || 503, { ...(delegated.data || {}), error: delegated.error || 'agent unavailable' });
       const s = this.newSession(b.task);
       if (Array.isArray(b.attachments) && b.attachments.length) s.messages[0].attachments = b.attachments;
       await this.persist(s);
@@ -596,9 +597,10 @@ export class SessionHub {
         id,
         message: b.message || '',
         fileRefs: uploaded.fileRefs,
+        requestId: b.requestId || null,
       });
       if (delegated.ok) return delegated.response;
-      return json(delegated.status || 503, { error: delegated.error || 'agent unavailable' });
+      return json(delegated.status || 503, { ...(delegated.data || {}), error: delegated.error || 'agent unavailable' });
     }
     return json(404, { error: 'not found' });
   }
