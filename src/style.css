@@ -112,23 +112,6 @@ body {
 .list-actions { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .list-actions .btn { flex: 1; justify-content: center; }
 
-/* Sidebar new-session panel — its own scrollable block, separate from the
-   session list below it and from the reply composer in the right rail. */
-.create-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  flex-shrink: 0;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.create-panel textarea { min-height: 90px; resize: vertical; }
-.create-buttons { display: flex; gap: 8px; align-items: center; }
-.create-buttons .btn-primary { margin-left: auto; }
-
 /* Center pane: conversation is the dominant surface, full height */
 .pane-convo {
   flex: 1;
@@ -149,6 +132,12 @@ body {
   flex-direction: column;
   min-height: 0;
 }
+.actions-header { padding: 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.actions-header .btn { width: 100%; justify-content: center; }
+.session-context { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.session-context:empty { display: none; }
+.new-session-project { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; padding-bottom: 4px; }
+.btn-cancel-new { width: 100%; justify-content: center; }
 .actions-bar {
   display: flex;
   flex-wrap: wrap;
@@ -193,11 +182,14 @@ body {
   .panes { flex-direction: column; }
   .pane-list { width: 100%; }
   .pane-convo, .pane-actions { display: none; }
-  .pane-actions { width: 100%; border-left: none; border-top: 1px solid var(--border); flex: none; max-height: 45vh; }
+  .pane-actions { width: 100%; border-left: none; border-top: 1px solid var(--border); flex: none; max-height: 55vh; }
+  .app-shell:not(.convo-open) .pane-actions { display: flex; max-height: none; }
+  .app-shell:not(.convo-open) .pane-actions .reply-form,
+  .app-shell:not(.convo-open) .pane-actions .session-context { display: none; }
   .app-shell.convo-open .pane-list { display: none; }
   .app-shell.convo-open .pane-convo { display: flex; }
   .app-shell.convo-open .pane-actions { display: flex; }
-  .reply-form { flex: none; }
+  .reply-form { flex: 1; }
   .reply-form textarea { min-height: 80px; }
   .mobile-only { display: inline-block; }
 }
@@ -414,7 +406,7 @@ input:focus, textarea:focus, select:focus {
 
 /* Reply form — vertical, fills the right rail */
 .reply-form {
-  flex: 1;
+  flex: 1 1 auto;
   padding: 12px;
   display: flex;
   flex-direction: column;
