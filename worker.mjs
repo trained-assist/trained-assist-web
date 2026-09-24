@@ -163,43 +163,43 @@ export class SessionHub {
   // so the UI degrades to just the local (imported/demo) sessions, never errors.
   async agentSessions(username) {
     const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
-    if (!base || !secret) return [];
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured', sessions: [] };
     try {
       const r = await fetch(base.replace(/\/web\/verify$/, '/web/sessions-list'), {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
         body: JSON.stringify({ username, limit: 50 }),
       });
-      if (r.status !== 200) return [];
-      const data = await r.json();
-      return Array.isArray(data.sessions) ? data.sessions : [];
-    } catch { return []; }
+      const data = await r.json().catch(() => ({}));
+      if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent sessions unavailable', sessions: [] };
+      return { ok: true, status: 200, sessions: Array.isArray(data.sessions) ? data.sessions : [] };
+    } catch {
+      return { ok: false, status: 503, error: 'agent unavailable', sessions: [] };
+    }
   }
   async agentSession(username, id) {
     const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
-    if (!base || !secret) return null;
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured', session: null };
     try {
       const r = await fetch(base.replace(/\/web\/verify$/, '/web/session-get'), {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
         body: JSON.stringify({ username, id }),
       });
-      if (r.status !== 200) return null;
-      const data = await r.json();
-      return data.session || null;
-    } catch { return null; }
+      const data = await r.json().catch(() => ({}));
+      if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent session unavailable', session: null };
+      return { ok: true, status: 200, session: data.session || null };
+    } catch {
+      return { ok: false, status: 503, error: 'agent unavailable', session: null };
+    }
   }
 
-  // Write-side delegation: forward a run/reply to the agent's bearer-gated
-  // /web/run-bearer or /web/reply-bearer and stream its SSE straight back to the
-  // browser. This is the write twin of agentSessions()/agentSession() (which only
-  // READ). Returns null when delegation isn't configured OR the agent responds
-  // non-200 (e.g. the endpoint isn't deployed yet) — the caller then falls back to
-  // its old behaviour, so shipping this worker BEFORE the agent redeploy is a
-  // no-op, and it auto-upgrades to real delegation the moment the agent is live.
+  // Write-side delegation. Never turn an upstream failure into a local demo
+  // success when agent delegation is configured: the user must know the real
+  // task did not start. Non-200 status/body are preserved as a JSON error.
   async agentTaskStream(username, agentPath, payload) {
     const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
-    if (!base || !secret) return null;
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured' };
     const target = base.replace(/\/web\/verify$/, agentPath);
     let r;
     try {
@@ -208,12 +208,15 @@ export class SessionHub {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
         body: JSON.stringify({ username, ...payload }),
       });
-    } catch { return null; }
-    if (r.status !== 200 || !r.body) return null;
-    // Pass the live SSE stream through untouched (same event shape the UI already
-    // consumes: data:{type:'chunk'|'done'|'error', ...}).
-    return new Response(r.body, { headers: {
-      'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } });
+    } catch {
+      return { ok: false, status: 503, error: 'agent unavailable' };
+    }
+    if (r.status !== 200 || !r.body) {
+      const data = await r.json().catch(() => ({}));
+      return { ok: false, status: r.status || 502, error: data.error || 'agent task rejected' };
+    }
+    return { ok: true, response: new Response(r.body, { headers: {
+      'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } }) };
   }
 
   async fetch(request) {
@@ -298,7 +301,12 @@ export class SessionHub {
     // existing web-created sessions: those keep origin:'local'.
     if (p === '/web/sessions') {
       const username = await this.tokenUser(request);
-      const remote = (await this.agentSessions(username)).map((s) => ({
+      const remoteResult = await this.agentSessions(username);
+      if (agentDelegation && !remoteResult.ok) {
+        return json(remoteResult.status === 401 || remoteResult.status === 403 ? 502 : remoteResult.status,
+          { error: remoteResult.error || 'Unable to load agent sessions' });
+      }
+      const remote = (remoteResult.sessions || []).map((s) => ({
         id: s.id,
         title: s.summary?.title || s.title || s.topic || s.lastUserMessage || s.id,
         summary: s.summary || null,
@@ -327,7 +335,11 @@ export class SessionHub {
       // Not local → it's an agent/Telegram session: delegate to the agent.
       const username = await this.tokenUser(request);
       const remote = await this.agentSession(username, id);
-      return remote ? json(200, remote) : json(404, { error: 'not found' });
+      if (!remote.ok) {
+        const status = remote.status === 401 || remote.status === 403 ? 502 : remote.status;
+        return json(status || 502, { error: remote.error || 'agent session unavailable' });
+      }
+      return remote.session ? json(200, remote.session) : json(404, { error: 'not found' });
     }
     // Project list for the New Session picker. The projects live in the agent's
     // per-profile projects/ model (single source of truth) — we delegate to its
@@ -495,9 +507,11 @@ export class SessionHub {
           });
           const data = await r.json().catch(() => ({}));
           return json(r.status, data);
-        } catch { /* fall through to ok:true below — same as the old no-op behaviour */ }
+        } catch {
+          return json(503, { error: 'agent unavailable; task was not confirmed stopped' });
+        }
       }
-      return json(200, { ok: true });
+      return json(503, { error: 'agent stop delegation unavailable' });
     }
     if (p === '/web/run' && m === 'POST') {
       const b = await body(request);
@@ -505,8 +519,13 @@ export class SessionHub {
       // starts an actual agent task (streamed live), not a demo echo. Falls back to
       // the local demo session if delegation is off or the agent is unreachable.
       const username = await this.tokenUser(request);
-      const proxied = await this.agentTaskStream(username, '/web/run-bearer', { task: b.task || '' });
-      if (proxied) return proxied;
+      const delegated = await this.agentTaskStream(username, '/web/run-bearer', {
+        task: b.task || '',
+        projectId: b.projectId || null,
+        attachments: Array.isArray(b.attachments) ? b.attachments : [],
+      });
+      if (delegated.ok) return delegated.response;
+      if (agentDelegation) return json(delegated.status || 503, { error: delegated.error || 'agent unavailable' });
       const s = this.newSession(b.task);
       if (Array.isArray(b.attachments) && b.attachments.length) s.messages[0].attachments = b.attachments;
       await this.persist(s);
@@ -527,9 +546,13 @@ export class SessionHub {
       // Not local → it's a REAL agent/Telegram session (only ever read before, so a
       // reply 404'd and the message vanished). Delegate the write to the agent.
       const username = await this.tokenUser(request);
-      const proxied = await this.agentTaskStream(username, '/web/reply-bearer', { id, message: b.message || '' });
-      if (proxied) return proxied;
-      return json(404, { error: 'no session' });
+      const delegated = await this.agentTaskStream(username, '/web/reply-bearer', {
+        id,
+        message: b.message || '',
+        attachments: Array.isArray(b.attachments) ? b.attachments : [],
+      });
+      if (delegated.ok) return delegated.response;
+      return json(delegated.status || 503, { error: delegated.error || 'agent unavailable' });
     }
     return json(404, { error: 'not found' });
   }

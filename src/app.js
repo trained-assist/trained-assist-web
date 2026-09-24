@@ -1130,7 +1130,7 @@ async function sendMessage() {
       showRunningControls(false);
       showContinue(false);
       const task = project ? `[Work in folder: ${project}]\n\n${message}` : message;
-      delivered = await startStream('/web/run', { task, attachments }, message, attachments);
+      delivered = await startStream('/web/run', { task, projectId: project || null, attachments }, message, attachments);
     } else {
       delivered = await startStream(`/web/reply/${encodeURIComponent(destination)}`,
         {message, attachments}, message, attachments);
