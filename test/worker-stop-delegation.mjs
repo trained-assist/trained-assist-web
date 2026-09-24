@@ -44,15 +44,17 @@ try {
     assert.deepEqual(calledWith.body, { username: 'owner', id: 'real-session-42' });
   }
 
-  // Agent unreachable → falls back to ok:true (old no-op behaviour), doesn't 500.
+  // Agent unreachable → fail closed. A fake ok:true would tell the user a live
+  // task was stopped even though no SIGTERM reached the agent.
   {
     const hub = makeHub();
     globalThis.fetch = async () => { throw new Error('offline'); };
     const res = await hub.fetch(new Request('https://web.example/web/stop/real-session-99', { method: 'POST' }));
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 503);
+    assert.match((await res.json()).error,/not confirmed stopped/);
   }
 
-  console.log('PASS: /web/stop delegates real sessions to the agent, leaves local sessions alone');
+  console.log('PASS: /web/stop delegates real sessions and fails closed on agent outage');
 } finally {
   globalThis.fetch = savedFetch;
 }
