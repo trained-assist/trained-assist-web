@@ -176,7 +176,7 @@ try {
   // accepted; UI must not invent a new mutation or restore the draft again.
   streamMode='duplicate';
   await page.getByTestId('send-reply').click();
-  await page.waitForFunction(()=>location.hash.includes('real-session'));
+  await page.getByTestId('reconnect-notice').filter({hasText:'повторно не запускаю'}).waitFor();
   assert.equal(submissions.at(-1).requestId,droppedRequestId,'retry reuses the original requestId');
   assert.match(await page.getByTestId('reconnect-notice').innerText(),/повторно не запускаю/);
   streamMode='done';
