@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node test/worker-projects.mjs && node test/worker-stop-delegation.mjs && node test/worker-agent-contract.mjs && node test/web-ux.mjs && node test/deploy-contract.mjs",
+    "test": "node test/worker-magic-link.mjs && node test/worker-projects.mjs && node test/worker-stop-delegation.mjs && node test/worker-agent-contract.mjs && node test/web-ux.mjs && node test/deploy-contract.mjs",
     "test:staging": "npm test"
   },
   "devDependencies": {
