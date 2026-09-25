@@ -365,15 +365,18 @@ export class SessionHub {
           ok = r.status === 200;
         } catch { ok = false; }
       }
-      // Fallback: local DEMO_PASSWORD, for resilience if the agent is unreachable.
-      if (!ok && PW && b.password === PW) ok = true;
+      // DEMO_PASSWORD is only for a demo deploy WITHOUT agent delegation. With
+      // delegation the agent's per-profile store is the sole authority: a shared
+      // password that accepted any `username` let anyone who knew it log in as
+      // every profile. Agent unreachable → login fails closed.
+      if (!ok && !agentDelegation && PW && b.password === PW) ok = true;
       if (!ok) return json(401, { error: 'Wrong password' });
       // Issue a fresh random session token, persist it, hand it back as an
       // httpOnly+Secure cookie the browser JS can't read or forge.
       // Resolve which profile logged in, so /web/sessions can pull THAT
       // profile's real Telegram sessions from the agent. Falls back to the
       // configured default profile when the form omits a username.
-      const loggedUser = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+      const loggedUser = (agentDelegation && b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
         ? b.username
         : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
       const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
