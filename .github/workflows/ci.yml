@@ -36,15 +36,23 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:staging
 
+  # Auto-merge uses GITHUB_TOKEN, and GitHub never starts a push run for commits
+  # pushed by GITHUB_TOKEN — so a push-only deploy silently never ran after #46.
+  # Deploy the exact merged main commit from the same PR run that merged it;
+  # a human push to main still deploys via the push branch of the condition.
   deploy-production:
-    needs: [check, staging-gate]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [check, staging-gate, auto-merge]
+    if: |
+      always() && needs.check.result == 'success' && needs.staging-gate.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') || needs.auto-merge.outputs.merged_sha != '')
     runs-on: ubuntu-latest
     environment:
       name: production
       url: https://app.trainedassist.store
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-merge.outputs.merged_sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -54,10 +62,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: npx wrangler deploy --var BUILD_SHA:"${{ github.sha }}"
+        run: npx wrangler deploy --var BUILD_SHA:"${{ needs.auto-merge.outputs.merged_sha || github.sha }}"
       - name: Smoke exact deployed revision and UI architecture
         env:
-          BUILD_SHA: ${{ github.sha }}
+          BUILD_SHA: ${{ needs.auto-merge.outputs.merged_sha || github.sha }}
           APP_URL: https://app.trainedassist.store
         run: |
           set -euo pipefail
@@ -83,14 +91,19 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      merged_sha: ${{ steps.merge.outputs.merged_sha }}
     steps:
       - name: Merge if up-to-date
+        id: merge
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
           BEHIND=$(gh pr view $PR --repo $REPO --json behindBy -q .behindBy 2>/dev/null || echo "0")
           if [ "$BEHIND" = "0" ]; then
             gh pr merge $PR --repo $REPO --squash --delete-branch
+            SHA=$(gh pr view $PR --repo $REPO --json state,mergeCommit -q 'select(.state=="MERGED") | .mergeCommit.oid')
+            echo "merged_sha=$SHA" >> "$GITHUB_OUTPUT"
           else
             echo "PR is $BEHIND commits behind — Merge Relay will update"
           fi
