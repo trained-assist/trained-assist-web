@@ -36,6 +36,46 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:staging
 
+  deploy-production:
+    needs: [check, staging-gate]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://app.trainedassist.store
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Deploy Cloudflare Worker + static assets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: npx wrangler deploy --var BUILD_SHA:"${{ github.sha }}"
+      - name: Smoke exact deployed revision and UI architecture
+        env:
+          BUILD_SHA: ${{ github.sha }}
+          APP_URL: https://app.trainedassist.store
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            health=$(curl -fsS "$APP_URL/healthz" 2>/dev/null || true)
+            html=$(curl -fsS "$APP_URL/" 2>/dev/null || true)
+            if printf '%s' "$health" | grep -q "\"buildSha\":\"$BUILD_SHA\"" \
+              && printf '%s' "$html" | grep -q 'data-testid="new-session"' \
+              && ! printf '%s' "$html" | grep -q 'data-testid="create-panel"'; then
+              echo "✅ production serves $BUILD_SHA with right-rail New Session"
+              exit 0
+            fi
+            echo "attempt $i: health=$health"
+            sleep 5
+          done
+          echo "❌ production did not serve the expected revision/UI"
+          exit 1
+
   auto-merge:
     needs: [check, staging-gate]
     if: success() && github.event_name == 'pull_request' && !github.event.pull_request.draft

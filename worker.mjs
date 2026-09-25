@@ -272,7 +272,7 @@ export class SessionHub {
     const AGENT_VERIFY_SECRET = this.env.AGENT_VERIFY_SECRET || null;
     const agentDelegation = !!(AGENT_VERIFY && AGENT_VERIFY_SECRET);
 
-    if (p === '/healthz') return json(200, { ok: true });
+    if (p === '/healthz') return json(200, { ok: true, buildSha: this.env.BUILD_SHA || null });
 
     // Fail closed: a deploy with NO way to verify a password (neither a local
     // DEMO_PASSWORD nor agent delegation) is LOCKED, never open. This is a
