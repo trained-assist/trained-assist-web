@@ -25,6 +25,35 @@ function bufferFromB64(b64) {
 }
 const MAX_UPLOAD = 3 * 1024 * 1024; // 3MB per file — keeps DO storage values sane
 
+// ── Journal magic link (Telegram «📜 Журнал» → logged-in web session) ──────
+// The Telegram gateway already knows which profile pressed the button, so it
+// signs a short-lived one-time ticket {u: username, s: sessionId, e: expiry ms,
+// n: nonce} with the bot↔agent shared secret (the same value this worker holds
+// as AGENT_VERIFY_SECRET). Format: base64url(json) + '.' + base64url(HMAC-SHA256(
+// secret, 'journal-login-v1.' + payload)). No password ever travels in a URL.
+const MAGIC_PREFIX = 'journal-login-v1.';
+const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromB64url = (s) => bufferFromB64(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+export async function verifyMagicTicket(ticket, secret, now = Date.now()) {
+  if (!secret || typeof ticket !== 'string' || ticket.length > 1024 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(ticket)) return null;
+  const [payload, sig] = ticket.split('.');
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+  let valid = false;
+  try { valid = await crypto.subtle.verify('HMAC', key, fromB64url(sig), enc.encode(MAGIC_PREFIX + payload)); } catch { return null; }
+  if (!valid) return null;
+  let t;
+  try { t = JSON.parse(new TextDecoder().decode(fromB64url(payload))); } catch { return null; }
+  if (!t || !/^[a-zA-Z0-9_-]{1,64}$/.test(t.u || '') || !/^[a-zA-Z0-9_-]{8,64}$/.test(t.n || '')) return null;
+  if (t.s != null && !/^[a-zA-Z0-9_.-]{1,128}$/.test(t.s)) return null;
+  if (!Number.isFinite(t.e) || t.e < now || t.e > now + 60 * 60 * 1000) return null;
+  return { username: t.u, sessionId: t.s || null, nonce: t.n, exp: t.e };
+}
+const magicPage = (title, bodyHtml, status = 200) => new Response(
+  `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+  `<meta name="robots" content="noindex"><title>${title}</title></head>` +
+  `<body style="font-family:system-ui,sans-serif;padding:2rem;max-width:32rem;margin:auto">${bodyHtml}</body></html>`,
+  { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+
 // All /web/* and /healthz traffic is routed to one named DO instance so every
 // request shares the same session store. Static assets bypass the DO.
 export default {
@@ -280,6 +309,43 @@ export class SessionHub {
     if (!PW && !agentDelegation) {
       if (p === '/web/auth' && m === 'POST') return json(503, { error: 'Auth not configured' });
       return json(503, { error: 'Locked: server password not configured' });
+    }
+
+    // GET only renders a page that auto-POSTs the ticket: Telegram's link-preview
+    // crawler and other prefetchers issue GETs, so a GET must never burn the
+    // one-time ticket. The POST consumes it (nonce stored once), mints a normal
+    // web_token for the ticket's profile — replacing whichever profile was
+    // logged in before — and redirects straight into the dialog.
+    if (p === '/web/magic' && m === 'GET') {
+      const t = url.searchParams.get('t') || '';
+      if (!/^[A-Za-z0-9_.-]{1,1024}$/.test(t)) return magicPage('Ссылка недействительна', '<h2>Ссылка недействительна</h2><p>Нажми «📜 Журнал» в Telegram ещё раз.</p>', 400);
+      return magicPage('Открываю журнал…',
+        `<form method="post" action="/web/magic"><input type="hidden" name="t" value="${t}">` +
+        `<p>Открываю журнал…</p><noscript><button type="submit">Открыть журнал</button></noscript></form>` +
+        `<script>history.replaceState(null,'','/web/magic');document.forms[0].submit()</script>`);
+    }
+    if (p === '/web/magic' && m === 'POST') {
+      let t = '';
+      const ct = request.headers.get('content-type') || '';
+      if (ct.includes('application/json')) t = (await body(request)).t || '';
+      else { try { t = (await request.formData()).get('t') || ''; } catch { t = ''; } }
+      const ticket = await verifyMagicTicket(String(t), AGENT_VERIFY_SECRET);
+      const expired = '<h2>Ссылка устарела или уже использована</h2><p>Нажми «📜 Журнал» в Telegram ещё раз — придёт новая ссылка.</p>';
+      if (!ticket) return magicPage('Ссылка устарела', expired, 403);
+      const nonceKey = `m:${ticket.nonce}`;
+      if (await this.state.storage.get(nonceKey)) return magicPage('Ссылка устарела', expired, 403);
+      await this.state.storage.put(nonceKey, ticket.exp);
+      // Opportunistic cleanup of spent nonces whose tickets have expired anyway.
+      const spent = await this.state.storage.list({ prefix: 'm:', limit: 200 });
+      const stale = [...spent].filter(([, exp]) => exp < Date.now()).map(([k]) => k);
+      if (stale.length) await this.state.storage.delete(stale);
+      const old = this.cookieToken(request);
+      if (old) await this.state.storage.delete(`t:${old}`);
+      const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
+      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: ticket.username, via: 'journal-link' });
+      const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
+      const location = ticket.sessionId ? `/#/session/${encodeURIComponent(ticket.sessionId)}` : '/';
+      return new Response(null, { status: 303, headers: { location, 'set-cookie': cookie, 'cache-control': 'no-store' } });
     }
 
     if (p === '/web/auth' && m === 'POST') {
