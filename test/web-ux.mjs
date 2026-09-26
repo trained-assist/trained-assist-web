@@ -21,7 +21,17 @@ const rpPlan = {
   totalSessions: 3,
   unassigned: 1,
 };
-const session = { id: 'real-session', title: 'Fallback', summary: { title: 'Проверить создание проектов и удобство веб-интерфейса', gist: 'Папки, голосовой ввод и состояние работы' }, status: 'completed', messageCount: 2, messages: [{role:'user',content:'Привет'}] };
+const session = { id: 'real-session', title: 'Fallback', summary: { title: 'Проверить создание проектов и удобство веб-интерфейса', gist: 'Папки, голосовой ввод и состояние работы' }, status: 'completed', messageCount: 2, messages: [
+  {role:'user',content:'Привет'},
+  {role:'assistant',content:'Ответ с разбором',at:1000},
+] };
+const tracePayload = { ok: true, engine: 'opencode', sessionId: 'real-session', ttlMs: 604800000, events: [], byMessage: [[
+  { kind: 'reasoning', text: 'Сначала смотрю, что уже есть.', at: 500 },
+  { kind: 'tool', tool: 'bash', state: 'completed', input: 'ls', output: 'a.txt\nb.txt', at: 600 },
+  { kind: 'text', text: 'Нашёл файлы.', at: 700 },
+  { kind: 'step-start', at: 650 },
+  { kind: 'step-finish', reason: 'end_turn', cost: 0.01, at: 800 },
+]] };
 const server = createServer(async (req,res) => {
   const json = (data,code=200) => { res.writeHead(code, {'content-type':'application/json'});res.end(JSON.stringify(data)); };
   if(req.url === '/web/me') return json({username:'ux-test'});
@@ -63,7 +73,10 @@ const server = createServer(async (req,res) => {
     const timer=setTimeout(()=>res.end(streamMode === 'drop' ? '' : 'data: {"type":"done","sessionId":"real-session"}\n\n'),1500);
     res.on('close',()=>clearTimeout(timer));return;
   }
-  if(req.url.startsWith('/web/session/')) return json(session);
+  if(req.url.startsWith('/web/session/')) {
+    if (req.url.endsWith('/trace')) return json(tracePayload);
+    return json(session);
+  }
   try {
     const file = req.url === '/' ? 'index.html' : req.url.slice(1);
     const data = await readFile(new URL('../src/'+file, import.meta.url));
@@ -320,5 +333,25 @@ try {
   await page.getByTestId('reproject-close').click();
   await page.getByTestId('reproject-modal').waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);
-  console.log('PASS: single right-rail composer (New/Reply, project create/retry, shared file/mic controls, draft isolation, session-list height stable); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert');
+
+  // ── Полный лог (#55): «🧠 Полный лог» под assistant-сообщением раскрывает трейс.
+  await page.getByTestId('session-item').click();
+  await page.getByTestId('show-trace').waitFor();
+  assert.equal(await page.getByTestId('show-trace').count(),1,'trace toggle on the single assistant message');
+  const traceBody = page.getByTestId('trace-block').locator('.trace-body');
+  assert(await traceBody.isHidden(),'trace body starts collapsed');
+  await page.getByTestId('show-trace').click();
+  await traceBody.waitFor({state:'visible'});
+  await page.waitForFunction(() => document.querySelector('.trace-reasoning')?.textContent.includes('Сначала смотрю'));
+  assert.match(await page.getByTestId('trace-block').innerText(),/Рассуждения/);
+  assert.match(await page.getByTestId('trace-block').innerText(),/bash/);
+  await page.getByTestId('trace-block').locator('details summary').click();
+  await page.waitForFunction(() => document.querySelector('.trace-output pre')?.textContent.includes('a.txt'));
+  assert.match(await page.getByTestId('trace-block').innerText(),/a\.txt/);
+  assert.match(await page.getByTestId('trace-block').innerText(),/хранится 7 дней/);
+  await page.getByTestId('show-trace').click();
+  assert(await traceBody.isHidden(),'toggle collapses again');
+  assert.deepEqual(errors,[]);
+
+  console.log('PASS: single right-rail composer (New/Reply, project create/retry, shared file/mic controls, draft isolation, session-list height stable); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert; full-trace toggle expand/collapse');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }
