@@ -98,3 +98,22 @@ try {
 
   console.log('PASS: worker→agent create/reply/read contracts fail closed; web attachment bytes are durably bridged before task start');
 } finally { globalThis.fetch=savedFetch; }
+
+// Non-JSON upstream failure (agent died mid-request → proxy 502 HTML) must be
+// surfaced honestly, never as the fabricated "agent task rejected".
+{
+  const h = hub();
+  globalThis.fetch = async () => new Response('<html><title>502 Bad Gateway</title></html>', { status: 502, headers: { 'content-type': 'text/html' } });
+  const res = await h.fetch(new Request('https://web.example/web/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task: 'hello' }) }));
+  assert.equal(res.status, 502);
+  const body = await res.json();
+  assert.equal(body.error, 'Агент недоступен (HTTP 502)');
+}
+{
+  const h = hub();
+  globalThis.fetch = async () => new Response('upstream temporarily unavailable', { status: 503 });
+  const res = await h.fetch(new Request('https://web.example/web/reply/s-1', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: 'hi' }) }));
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error, 'upstream temporarily unavailable');
+}
+console.log('worker-agent-contract: proxy-failure mapping OK');
