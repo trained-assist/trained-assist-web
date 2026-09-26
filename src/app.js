@@ -407,6 +407,20 @@ function messageHtml(m) {
         m.role === 'assistant' ? md(m.content) : esc(m.content)
       }</div>
       ${attachmentsHtml(m.attachments)}
+      ${m.role === 'assistant' ? traceToggleHtml() : ''}
+    </div>`;
+}
+
+// Collapsible "полный лог" — the full working trace (reasoning/tool/steps) for
+// this assistant message. Rendered as a placeholder toggle; content loads from
+// /web/session/:id/trace on first click (see traceToggle click handler).
+function traceToggleHtml() {
+  return `
+    <div class="trace-block" data-testid="trace-block">
+      <button type="button" class="trace-toggle" data-testid="show-trace"
+              title="Полный лог процесса: рассуждения, инструменты, шаги"
+              aria-expanded="false">🧠 Полный лог</button>
+      <div class="trace-body hidden"></div>
     </div>`;
 }
 
@@ -475,6 +489,83 @@ document.addEventListener('click', async (e) => {
     text = content ? content.innerText : '';
   }
   if (text && await copyToClipboard(text)) flashCopied(btn);
+});
+
+// ─── Полный лог (trace) ──────────────────────────────────────────────────────
+// Each assistant message carries a «🧠 Полный лог» toggle. Clicking it loads the
+// full working trace (reasoning / tools / steps) for the CURRENT session once,
+// then toggles visibility. The trace is keyed to the session, not the message;
+// the agent groups events into per-message windows by timestamp (byMessage).
+function renderTraceEvents(events) {
+  if (!Array.isArray(events) || !events.length) {
+    return '<div class="trace-empty">Нет событий</div>';
+  }
+  return events.map((e) => {
+    switch (e.kind) {
+      case 'reasoning':
+        return `<div class="trace-reasoning"><div class="trace-label">💭 Рассуждения</div><pre>${esc(e.text)}</pre></div>`;
+      case 'tool':
+        return `<div class="trace-tool"><div class="trace-label">🔧 ${esc(e.tool)}${e.state ? ` · ${esc(e.state)}` : ''}</div>`
+          + (e.input ? `<pre class="trace-input">${esc(e.input)}</pre>` : '')
+          + (e.output ? `<details class="trace-output"><summary>Вывод (${esc(e.output.length)} симв)</summary><pre>${esc(e.output)}</pre></details>` : '')
+          + `</div>`;
+      case 'text':
+        return `<div class="trace-text"><div class="trace-label">💬 Текст</div><pre>${esc(e.text)}</pre></div>`;
+      case 'step-start':
+        return `<div class="trace-step">➡️ Шаг</div>`;
+      case 'step-finish':
+        return `<div class="trace-step">✅ Шаг завершён${e.reason ? ` (${esc(e.reason)})` : ''}${e.cost != null ? ` · $${Number(e.cost).toFixed(4)}` : ''}</div>`;
+      case 'compaction':
+        return `<div class="trace-step">🗜️ Сжатие контекста${e.auto ? ' (auto)' : ''}</div>`;
+      default:
+        return `<div class="trace-step">❓ ${esc(e.kind || 'событие')}</div>`;
+    }
+  }).join('');
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-testid="show-trace"]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const block = btn.closest('.trace-block');
+  const body = block && block.querySelector('.trace-body');
+  if (!body) return;
+  const expanded = btn.getAttribute('aria-expanded') === 'true';
+  if (expanded) {
+    btn.setAttribute('aria-expanded', 'false');
+    body.classList.add('hidden');
+    return;
+  }
+  // Load once, then cache in the DOM.
+  if (!body.dataset.loaded) {
+    body.innerHTML = '<div class="loading" role="status">Загружаю лог процесса…</div>';
+    body.classList.remove('hidden');
+    try {
+      const res = await api(`/web/session/${encodeURIComponent(currentSessionId)}/trace`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.ok === false) {
+        body.innerHTML = data.error === 'no-opencode-session'
+          ? '<div class="trace-empty">Лог процесса доступен только для сессий на OpenCode-движке.</div>'
+          : '<div class="trace-empty">Лог процесса недоступен для этой сессии.</div>';
+      } else {
+        const ttlNote = data.ttlMs
+          ? `<div class="trace-ttl">Лог хранится ${Math.round(data.ttlMs / 86400000)} дней</div>`
+          : '';
+        body.innerHTML = renderTraceEvents(data.byMessage && data.byMessage.length
+          ? data.byMessage[data.byMessage.length - 1]
+          : data.events) + ttlNote;
+        decorateCodeBlocks(body);
+      }
+    } catch (err) {
+      body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось загрузить лог')}</div>`;
+    }
+    body.dataset.loaded = '1';
+  }
+  btn.setAttribute('aria-expanded', 'true');
+  body.classList.remove('hidden');
+  scrollBottom();
 });
 
 function renderSession(session) {
