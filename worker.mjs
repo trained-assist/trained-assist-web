@@ -255,8 +255,11 @@ export class SessionHub {
         return { ok: false, status: 503, error: 'agent attachment upload unavailable' };
       }
       if (r.status !== 200) {
-        const data = await r.json().catch(() => ({}));
-        return { ok: false, status: r.status || 502, error: data.error || 'agent attachment upload rejected' };
+        const raw = await r.text().catch(() => '');
+        let data = {};
+        try { data = JSON.parse(raw); } catch { data = {}; }
+        const snippet = raw && !raw.includes('<') && raw.length <= 200 ? raw.trim() : '';
+        return { ok: false, status: r.status || 502, error: (data && data.error) || snippet || `Агент недоступен (HTTP ${r.status})` };
       }
       fileRefs.push({ id, name: stored.name || a.name || 'file', mime: stored.type || a.type || 'application/octet-stream' });
     }
@@ -281,8 +284,15 @@ export class SessionHub {
       return { ok: false, status: 503, error: 'agent unavailable' };
     }
     if (r.status !== 200 || !r.body) {
-      const data = await r.json().catch(() => ({}));
-      return { ok: false, status: r.status || 502, error: data.error || 'agent task rejected', data };
+      // The agent answers JSON with {error}; a 502/504 from the reverse proxy
+      // (agent died mid-request) is HTML/plain — do NOT fabricate a fake
+      // rejection message for it, surface the real transport failure.
+      const raw = await r.text().catch(() => '');
+      let data = {};
+      try { data = JSON.parse(raw); } catch { data = {}; }
+      const snippet = raw && !raw.includes('<') && raw.length <= 200 ? raw.trim() : '';
+      const error = (data && data.error) || snippet || `Агент недоступен (HTTP ${r.status})`;
+      return { ok: false, status: r.status || 502, error, data };
     }
     return { ok: true, response: new Response(r.body, { headers: {
       'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' } }) };
