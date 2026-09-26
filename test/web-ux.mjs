@@ -82,6 +82,30 @@ try {
   assert.equal(await page.getByTestId('session-item').count(),1,'short real session stays visible');
   assert(!await page.getByTestId('session-item').innerText().then(t=>t.includes('Done')));
 
+  // ── Session search (#53): full-width row above the list, plain multi-word match.
+  const searchBox = await page.getByTestId('search-input').boundingBox();
+  const listBox = await page.getByTestId('sessions-list').boundingBox();
+  assert(searchBox.width > listBox.width * 0.8, `search spans the list pane (${searchBox.width} vs ${listBox.width})`);
+  assert(searchBox.y < listBox.y, 'search sits above the session list');
+  await page.keyboard.press('/');
+  assert.equal(await page.evaluate(()=>document.activeElement?.id),'search-input','"/" focuses search');
+  await page.keyboard.type('ПРОЕКТОВ удобство');
+  assert.equal(await page.getByTestId('session-item').count(),1,'all words match (case-insensitive, any order)');
+  assert.match(await page.getByTestId('search-count').innerText(),/Найдено: 1/);
+  await page.getByTestId('search-input').fill('проектов ёлка');
+  assert.equal(await page.getByTestId('session-item').count(),0,'every word must match');
+  await page.getByTestId('sessions-no-match').waitFor();
+  await page.getByTestId('search-input').fill('голосовой ввод');
+  assert.equal(await page.getByTestId('session-item').count(),1,'gist is searchable');
+  await page.getByTestId('search-input').press('Escape');
+  assert.equal(await page.getByTestId('search-input').inputValue(),'','Esc clears search');
+  assert(await page.getByTestId('search-clear').isHidden(),'clear button hides when empty');
+  assert(await page.getByTestId('search-count').isHidden(),'count hides when empty');
+  await page.getByTestId('search-input').fill('xyz');
+  await page.getByTestId('search-clear').click();
+  assert.equal(await page.getByTestId('session-item').count(),1,'✕ restores the full list');
+  await page.getByTestId('search-input').blur();
+
   // ── One right-rail composer serves both New and Reply.
   const listBefore = await page.getByTestId('sessions-list').boundingBox();
   assert.equal(await page.getByTestId('create-panel').count(),0,'legacy sidebar create panel is gone');

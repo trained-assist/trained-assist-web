@@ -29,8 +29,15 @@
         </div>
 
         <div class="list-search">
-          <input type="search" id="search-input" data-testid="search-input"
-                 placeholder="Search sessions…" autocomplete="off" aria-label="Search sessions">
+          <div class="search-box" role="search">
+            <span class="search-icon" aria-hidden="true">🔎</span>
+            <input type="search" id="search-input" data-testid="search-input"
+                   placeholder="Поиск по сессиям…  ( / )" autocomplete="off" spellcheck="false"
+                   aria-label="Поиск по сессиям" aria-describedby="search-count">
+            <button type="button" class="search-clear" id="search-clear" data-testid="search-clear"
+                    title="Очистить (Esc)" aria-label="Очистить поиск" hidden>✕</button>
+          </div>
+          <div class="search-count" id="search-count" data-testid="search-count" role="status" aria-live="polite" hidden></div>
           <div class="search-row">
             <select id="project-filter" data-testid="project-filter" aria-label="Filter by project" title="Filter by project">
               <option value="">Все проекты</option>

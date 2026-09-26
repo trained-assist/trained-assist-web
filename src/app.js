@@ -174,10 +174,21 @@ async function loadSessions() {
   }
 }
 
+// Plain keyword search (no AI): every word of the query must occur somewhere in
+// the session's title/gist/topic/last messages/id. Case-insensitive, ё == е.
+function normSearch(str) { return String(str || '').toLowerCase().replace(/ё/g, 'е'); }
 function matchesSearch(s, q) {
-  if (!q) return true;
-  const hay = `${s.summary?.title || ''} ${s.summary?.gist || ''} ${s.topic || ''} ${s.title || ''} ${s.lastUserMessage || ''} ${s.lastMessage || ''} ${s.id}`.toLowerCase();
-  return hay.includes(q);
+  const words = normSearch(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = normSearch(`${s.summary?.title || ''} ${s.summary?.gist || ''} ${s.topic || ''} ${s.title || ''} ${s.lastUserMessage || ''} ${s.lastMessage || ''} ${s.projectId || ''} ${s.id}`);
+  return words.every(w => hay.includes(w));
+}
+
+function updateSearchMeta(q, shown) {
+  $('search-clear').hidden = !searchQuery;
+  const count = $('search-count');
+  count.hidden = !q;
+  if (q) count.textContent = shown ? `Найдено: ${shown}` : 'Ничего не найдено';
 }
 
 function renderSessions() {
@@ -192,6 +203,7 @@ function renderSessions() {
   const hideTests = !showTests && !q;
   const hiddenCount = hideTests ? list.filter(isTestSession).length : 0;
   if (hideTests) list = list.filter(s => !isTestSession(s));
+  updateSearchMeta(q, list.length);
 
   if (!allSessions.length) {
     el.innerHTML = '<div class="empty" data-testid="sessions-empty"><h3>No sessions yet</h3><p>Start a new session to begin</p></div>';
@@ -207,7 +219,7 @@ function renderSessions() {
 
   if (!list.length) {
     el.innerHTML = (q
-      ? `<div class="empty" data-testid="sessions-no-match"><p>No sessions match “${esc(searchQuery)}”</p></div>`
+      ? `<div class="empty" data-testid="sessions-no-match"><p>Ничего не найдено по «${esc(searchQuery)}»</p></div>`
       : `<div class="empty" data-testid="sessions-all-hidden"><p>${projectFilter ? 'No sessions in this project.' : 'Only test sessions here — all hidden.'}</p></div>`)
       + toggle;
     wireTestsToggle();
@@ -1451,6 +1463,23 @@ $('btn-back').addEventListener('click', e => {
 $('search-input').addEventListener('input', e => {
   searchQuery = e.target.value;
   renderSessions();
+});
+function clearSearch() {
+  $('search-input').value = '';
+  searchQuery = '';
+  renderSessions();
+}
+$('search-clear').addEventListener('click', () => { clearSearch(); $('search-input').focus(); });
+$('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { e.preventDefault(); if (searchQuery) clearSearch(); else e.target.blur(); }
+});
+// "/" focuses search from anywhere, unless the user is typing in a field.
+document.addEventListener('keydown', e => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  e.preventDefault();
+  $('search-input').focus();
 });
 
 // Filter the cached session list down to one project.

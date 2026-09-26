@@ -104,9 +104,16 @@ body {
   flex-direction: column;
   min-height: 0;
 }
-.list-search { padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; gap: 8px; }
-.list-search input { padding: 8px 12px; flex: 1; min-width: 0; }
-.list-search select { padding: 8px 10px; flex-shrink: 0; max-width: 40%; }
+/* Search: its own full-width row on top, project filter + ⟳ on the row below */
+.list-search { padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+.search-box { position: relative; display: flex; align-items: center; }
+.search-box .search-icon { position: absolute; left: 10px; font-size: 13px; opacity: .6; pointer-events: none; }
+.search-box input { width: 100%; min-width: 0; padding: 9px 32px 9px 32px; }
+.search-box input::-webkit-search-cancel-button { display: none; }
+.search-clear { position: absolute; right: 6px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 13px; padding: 4px 6px; border-radius: 6px; }
+.search-clear:hover { background: var(--border); }
+.search-count { font-size: 12px; color: var(--text-muted); padding: 0 2px; }
+.list-search select { padding: 8px 10px; }
 .list-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 
 .list-actions { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
