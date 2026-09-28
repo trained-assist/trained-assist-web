@@ -118,7 +118,13 @@
           <div id="attachments" class="attachments hidden" data-testid="attachments"></div>
           <div id="attach-hint" class="voice-status hidden" data-testid="attach-hint" role="status" aria-live="polite"></div>
           <div id="voice-status" class="voice-status hidden" data-testid="voice-status" role="status" aria-live="polite"></div>
-          <div id="composer-notice" class="voice-status hidden" data-testid="composer-notice" role="status" aria-live="polite"></div>
+          <!-- Busy/queued hint. While a run is in flight the composer is a one-slot
+               queue: text typed now is sent by itself when the run ends — see
+               updateSendLabel/armAutoSendIfBusy in app.js. -->
+          <div id="composer-notice" class="voice-status hidden" data-testid="composer-notice" role="status" aria-live="polite">
+            <span id="composer-notice-text"></span>
+            <button type="button" id="btn-autosend-cancel" class="reply-queue-remove hidden" data-testid="autosend-cancel" title="Отправить вручную, когда задача завершится">✕ Отменить автоотправку</button>
+          </div>
           <div id="reply-buttons" class="reply-buttons">
             <button class="btn btn-ghost" id="btn-attach" data-testid="attach-file" aria-label="Добавить файл">📎 Файл</button>
             <input type="file" id="attach-file" data-testid="file-input" multiple hidden>

@@ -453,6 +453,9 @@ input:focus, textarea:focus, select:focus {
 .voice-status.voice-busy { background: #e8f0fe; color: #1a56db; }
 .voice-status.voice-ok { background: #e6f4ea; color: #1e7e34; }
 .voice-status.voice-error { background: #fde8e8; color: #c0392b; }
+/* Composer queue hint: busy/queued text + a cancel affordance on one line. */
+#composer-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#composer-notice .reply-queue-remove { font-size: 12px; text-decoration: underline; }
 
 /* Attachment chips (staged, not yet uploaded) */
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }

@@ -268,6 +268,70 @@ let sessionRunning = false;
 let dispatching = false;
 let projectsReady = false;
 
+// The composer doubles as a one-slot queue while a run is in flight: content
+// typed/dictated now is sent by itself when the run ends (`autoSendArmed`),
+// instead of forcing a manual Send later. Armed only for a reply bound to the
+// running session; a new session or another session is never auto-sent.
+let autoSendArmed = false;
+let autoSendTimer = null;      // settle-window poll while the run finishes
+let lastComposerInputAt = 0;   // last keystroke/transcript/paste
+
+// Don't fire the moment the run ends if the user is still mid-word: wait for a
+// short pause in typing so a half-written reply never goes out.
+const AUTO_SEND_SETTLE_MS = 1200;
+
+function clearAutoSendTimer() {
+  if (autoSendTimer) { clearInterval(autoSendTimer); autoSendTimer = null; }
+}
+
+function composerHasContent() {
+  return !!$('reply-input').value.trim() || pendingAttachments.length > 0;
+}
+
+function disarmAutoSend() {
+  autoSendArmed = false;
+  clearAutoSendTimer();
+  updateSendLabel();
+}
+
+// Content in the live composer while this reply is running → arm the queue.
+// Called on every input/attachment/transcript; recomputed from scratch so a
+// cleared box (or an idle session) always disarms.
+function armAutoSendIfBusy() {
+  const busy = streaming || dispatching || sessionRunning;
+  const next = busy && composerMode === 'reply' && !!draftDestination && composerHasContent();
+  if (next) {
+    if (!autoSendArmed) { autoSendArmed = true; updateSendLabel(); }
+  } else if (autoSendArmed) {
+    disarmAutoSend();
+  }
+}
+
+// A run just finished. If a reply was queued for the session the composer is
+// bound to, send it — after a short typing pause (scheduleAutoSend).
+function onRunEnded() {
+  if (!autoSendArmed) return;
+  if (composerMode !== 'reply' || !draftDestination) { disarmAutoSend(); return; }
+  if (streaming || dispatching || sessionRunning) return; // another run already started
+  scheduleAutoSend();
+}
+
+function scheduleAutoSend() {
+  if (autoSendTimer) return;
+  const tick = () => {
+    if (!autoSendArmed) { clearAutoSendTimer(); updateSendLabel(); return; }
+    if (streaming || dispatching || sessionRunning || recording || voiceBusy) return;
+    if (!composerHasContent()) { disarmAutoSend(); return; }
+    if (Date.now() - lastComposerInputAt < AUTO_SEND_SETTLE_MS) return;
+    clearAutoSendTimer();
+    autoSendArmed = false; // consume before send so a failed send never loops
+    updateSendLabel();
+    sendMessage();
+  };
+  autoSendTimer = setInterval(tick, 400);
+  tick();
+}
+
 function rememberDraft() {
   if (!draftDestination) return;
   const prev = composerDrafts.get(draftDestination) || {};
@@ -307,6 +371,7 @@ function openDraft(destination) {
     return;
   }
   rememberDraft();
+  disarmAutoSend(); // a queued reply belongs to the session it was typed in
   draftDestination = destination;
   composerMode = destination === 'new' ? 'new' : 'reply';
   const draft = composerDrafts.get(destination);
@@ -323,8 +388,17 @@ function updateSendLabel() {
   $('btn-send').textContent = busy ? 'Выполняется…' : isNew ? 'Начать' : 'Отправить';
   $('btn-send').disabled = busy || (isNew ? !projectsReady : !draftDestination);
   const notice = $('composer-notice');
-  notice.textContent = busy ? 'Можно подготовить следующий ответ. Отправка станет доступна после завершения.' : '';
-  notice.classList.toggle('hidden', !busy);
+  const queued = autoSendArmed && composerMode === 'reply';
+  const show = busy || queued;
+  notice.classList.toggle('hidden', !show);
+  if (show) {
+    $('composer-notice-text').textContent = busy
+      ? (queued
+          ? 'Отправится автоматически, когда агент закончит.'
+          : 'Можно подготовить следующий ответ. Отправка станет доступна после завершения.')
+      : 'Подготовленный ответ отправится автоматически…';
+  }
+  $('btn-autosend-cancel').classList.toggle('hidden', !queued);
 }
 
 function startNewSessionMode() {
@@ -645,6 +719,7 @@ function startPolling(sessionId) {
         clearInterval(pollTimer);
         renderSession(session);
         streamEl.classList.add('hidden');
+        onRunEnded(); // a queued reply may now go out on its own
       } else {
         streamEl.innerHTML = `<div class="loading"><div class="spinner"></div>Агент работает · проверено ${new Date().toLocaleTimeString()} · ожидание ${Math.floor((Date.now() - started) / 1000)} с</div>`;
       }
@@ -821,6 +896,9 @@ async function startStream(endpoint, body, appendUserMsg = null, appendAtts = nu
     // Stream is over (done reloads via loadSession; error stays here) — offer
     // Continue again so the user can nudge a stalled/errored session forward.
     showContinue(!!currentSessionId && !sessionRunning);
+    // Only a delivered run counts as "the run finished". A dropped or errored
+    // POST leaves the agent's state unknown — never auto-send into that gap.
+    if (delivered) onRunEnded();
 
   }
 
@@ -1204,12 +1282,16 @@ function addFiles(fileList) {
   renderAttachments();
   if (skipped) setAttachHint(`${skipped} file(s) skipped — max 3MB each`, 'error');
   else if (files.length) setAttachHint(`${pendingAttachments.length} attachment(s) ready`, 'ok');
+  // An attachment is composer content too — it joins the queue like typed text.
+  lastComposerInputAt = Date.now();
+  armAutoSendIfBusy();
 }
 
 // Upload a list of staged files to the worker, returning stored refs
 // {id,name,type,size,url}. Takes the list explicitly (rather than always
-// reading the live `pendingAttachments`) because a queued message carries its
-// own snapshot, taken at queue time — see queueMessage.
+// reading the live `pendingAttachments`) because sendMessage snapshots the
+// staged files into `files` before any await, so a send that spans a mode or
+// destination switch still uploads exactly what the user staged.
 async function uploadFiles(list) {
   const refs = [];
   for (const a of list) {
@@ -1233,6 +1315,9 @@ async function sendMessage() {
   if (streaming || dispatching || (!isNew && (sessionRunning || !destination)) || (isNew && !projectsReady)) return;
   const message = $('reply-input').value.trim();
   if (!message && !pendingAttachments.length) return;
+  // Any explicit Send (or an auto-send firing) consumes the queue.
+  clearAutoSendTimer();
+  autoSendArmed = false;
   rememberDraft();
   const requestId = ensureDraftRequestId(destination);
   const files = pendingAttachments.slice();
@@ -1305,9 +1390,11 @@ async function sendMessage() {
 // ─── Voice input (Deepgram) ──────────────────────────────────────────────────
 // Click to record, click again to stop. The audio is POSTed to /web/transcribe
 // (which proxies Deepgram server-side) and the transcript is *appended to the
-// reply draft* — never auto-sent, so the user reviews/edits before Send. Deepgram
-// occasionally swallows a short/quiet clip; on an empty result we auto-retry the
-// same audio once, then surface a "didn't catch that" hint.
+// reply draft* — while idle it is not auto-sent, so the user reviews/edits
+// before Send; while a run is in flight it is queued (armAutoSendIfBusy) and
+// goes out when the run ends. Deepgram occasionally swallows a short/quiet
+// clip; on an empty result we auto-retry the same audio once, then surface a
+// "didn't catch that" hint.
 let mediaRecorder = null;
 let recordChunks = [];
 let recording = false;
@@ -1402,7 +1489,13 @@ async function transcribeBlob(blob, attempt = 0, destination = recordingDestinat
       input.value = draft.message;
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
-      setVoiceStatus('✓ Transcribed — review & Send', 'ok');
+      lastComposerInputAt = Date.now();
+      armAutoSendIfBusy();
+      // Idle: dictation stays a draft to review & send. While the agent runs it
+      // joins the queue and leaves on its own when the run ends.
+      setVoiceStatus(autoSendArmed
+        ? '✓ Расшифровано — отправится автоматически, когда агент закончит'
+        : '✓ Transcribed — review & Send', 'ok');
     }
 
   } catch (err) {
@@ -1426,6 +1519,8 @@ async function stopSession() {
   if (!currentSessionId) return;
   if (streamAbort) streamAbort.abort();
   clearInterval(pollTimer);
+  clearAutoSendTimer();
+  autoSendArmed = false; // user intervened — the queue is theirs to re-arm
   streaming = false;
   updateSendLabel();
   try {
@@ -1445,6 +1540,8 @@ async function supplementSession() {
   if (!currentSessionId) return;
   const message = $('reply-input').value.trim();
   if (!message) return;
+  clearAutoSendTimer();
+  autoSendArmed = false; // this text goes out as a restart, not as a queued reply
   if (streamAbort) streamAbort.abort();
   clearInterval(pollTimer);
   streaming = false;
@@ -1596,7 +1693,18 @@ $('btn-confirm-cancel').addEventListener('click', hideConfirmPanel);
 $('btn-mic').addEventListener('click', () => toggleRecording());
 
 $('btn-send').addEventListener('click', sendMessage);
-$('reply-input').addEventListener('input', rememberDraft);
+$('btn-autosend-cancel').addEventListener('click', () => {
+  disarmAutoSend();
+  // The queued transcription hint would otherwise outlive the queue itself.
+  const vs = $('voice-status');
+  if (vs && !vs.classList.contains('hidden') && vs.textContent.startsWith('✓ Расшифровано')) setVoiceStatus('');
+  $('reply-input').focus();
+});
+$('reply-input').addEventListener('input', () => {
+  lastComposerInputAt = Date.now();
+  rememberDraft();
+  armAutoSendIfBusy();
+});
 $('btn-attach').addEventListener('click', () => $('attach-file').click());
 $('attach-file').addEventListener('change', e => { addFiles(e.target.files); rememberDraft(); e.target.value = ''; });
 $('reply-input').addEventListener('keydown', e => {

@@ -268,6 +268,35 @@ try {
   await page.waitForFunction(()=>document.getElementById('btn-stop').classList.contains('hidden'),{timeout:3000});
   assert.equal(session.status,'completed','confirmed Стоп reached /web/stop');
 
+  // ── Composer queue: a reply typed while the session runs goes out by itself
+  // when the run ends, and the queue is cancellable while armed. Typed text
+  // during a run is never silently discarded and never sent twice.
+  session.status='running';
+  await page.reload();
+  await page.waitForTimeout(2900);
+  await page.getByTestId('reply-input').fill('Сообщение в очереди');
+  await page.getByTestId('composer-notice').waitFor();
+  assert.match(await page.getByTestId('composer-notice').innerText(),/Отправится автоматически/,'queued notice replaces the passive busy hint');
+  assert(await page.getByTestId('autosend-cancel').isVisible(),'queued reply exposes a cancel affordance');
+  assert(await page.getByTestId('send-reply').isDisabled(),'send stays disabled while the run is in flight');
+  const postsBeforeAuto = posts;
+  // Cancel reverts to the plain busy hint and keeps the text as a normal draft.
+  await page.getByTestId('autosend-cancel').click();
+  assert.match(await page.getByTestId('composer-notice').innerText(),/Можно подготовить следующий ответ/);
+  assert(await page.getByTestId('autosend-cancel').isHidden(),'cancel affordance disappears once disarmed');
+  // Typing again re-arms it; then the run ends with no further click.
+  await page.getByTestId('reply-input').fill('Сообщение в очереди');
+  session.status='completed';
+  const autoDeadline = Date.now() + 12000;
+  while (posts === postsBeforeAuto && Date.now() < autoDeadline) await page.waitForTimeout(200);
+  assert.equal(posts, postsBeforeAuto+1,'queued reply auto-sends exactly once when the run ends');
+  assert.equal(submissions.at(-1).message,'Сообщение в очереди');
+  await page.waitForFunction(()=>document.querySelector('#reply-input').value === '');
+  assert(await page.getByTestId('autosend-cancel').isHidden(),'queue is consumed by the send');
+  // Once the auto-sent run itself finishes there is no hint left to show.
+  await page.waitForFunction(()=>!document.querySelector('#btn-send').disabled,{timeout:6000});
+  assert(await page.getByTestId('composer-notice').isHidden(),'no queue hint once the composer is idle');
+
   for (const width of [1440,1280,1024,390]) {
     await page.setViewportSize({width,height:844});
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`no overflow at ${width}`);
@@ -353,5 +382,5 @@ try {
   assert(await traceBody.isHidden(),'toggle collapses again');
   assert.deepEqual(errors,[]);
 
-  console.log('PASS: single right-rail composer (New/Reply, project create/retry, shared file/mic controls, draft isolation, session-list height stable); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert; full-trace toggle expand/collapse');
+  console.log('PASS: single right-rail composer (New/Reply, project create/retry, shared file/mic controls, draft isolation, session-list height stable); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); queued auto-send (arm while running, cancel, auto-send exactly once on run end, composer cleared); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert; full-trace toggle expand/collapse');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }
