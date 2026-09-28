@@ -243,6 +243,27 @@ export class SessionHub {
     }
   }
 
+  // «📋 Сжатый лог» (session digest) — delegates to the agent's bearer twin
+  // /web/session-digest exactly like agentTrace does for the full log. The
+  // digest is computed and cached on the agent side; nothing lives here.
+  // First call may take seconds (one cheap LLM pass over the session).
+  async agentDigest(username, id) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured' };
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/session-digest'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, id }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent digest unavailable' };
+      return { ok: true, status: 200, digest: data };
+    } catch {
+      return { ok: false, status: 503, error: 'agent unavailable' };
+    }
+  }
+
   // Copy browser-uploaded bytes from Durable Object storage into the agent's
   // durable intake store before starting real work. The resulting hex ids are
   // the fileRefs contract the agent materializes into media/intake.
@@ -468,20 +489,21 @@ export class SessionHub {
       return json(200, merged);
     }
     if (p.startsWith('/web/session/')) {
-      const parts = p.split('/'); // ['', 'web', 'session', id, 'trace'?]
+      const parts = p.split('/'); // ['', 'web', 'session', id, 'trace'? | 'digest'?]
       const id = decodeURIComponent(parts[3]);
       const trace = parts[4] === 'trace';
-      if (trace) {
-        // Full working log — only agent sessions have one (local imports don't).
+      const digest = parts[4] === 'digest';
+      if (trace || digest) {
+        // Full working log / digest — only agent sessions have one (local imports don't).
         const s = this.sessions.get(id);
-        if (s) return json(200, { ok: false, error: 'no-trace-local', engine: null });
+        if (s) return json(200, { ok: false, error: digest ? 'no-digest-local' : 'no-trace-local', engine: null });
         const username = await this.tokenUser(request);
-        const remote = await this.agentTrace(username, id);
+        const remote = digest ? await this.agentDigest(username, id) : await this.agentTrace(username, id);
         if (!remote.ok) {
           const status = remote.status === 401 || remote.status === 403 ? 502 : remote.status;
-          return json(status || 502, { error: remote.error || 'agent trace unavailable' });
+          return json(status || 502, { error: remote.error || (digest ? 'agent digest unavailable' : 'agent trace unavailable') });
         }
-        return json(200, remote.trace);
+        return json(200, digest ? remote.digest : remote.trace);
       }
       const s = this.sessions.get(id);
       if (s) return json(200, s); // local (imported/demo/web-created) session

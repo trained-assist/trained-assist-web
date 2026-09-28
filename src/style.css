@@ -688,3 +688,22 @@ input:focus, textarea:focus, select:focus {
 .trace-step { color: var(--muted, var(--text)); font-size: 0.9em; }
 .trace-empty { color: var(--muted, var(--text)); font-style: italic; font-size: 0.9em; padding: 4px 0; }
 .trace-ttl { margin-top: 10px; font-size: 0.8em; color: var(--muted, var(--text)); opacity: 0.8; }
+
+/* Сжатый лог (digest) — второй тогл рядом с «🧠 Полный лог» (#1777) */
+.trace-block .trace-toggle + .trace-toggle { margin-left: 6px; }
+.digest-body {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  padding: 10px 12px;
+  max-height: 55vh;
+  overflow-y: auto;
+  font-size: 0.92em;
+}
+.digest-summary { margin-bottom: 8px; }
+.digest-activity { margin-block: 4px; }
+.digest-minutes { color: var(--muted, var(--text)); font-size: 0.85em; }
+.digest-group { margin-top: 10px; }
+.digest-group-title { font-weight: 600; color: var(--muted, var(--text)); font-size: 0.9em; margin-bottom: 4px; }
+.digest-item { overflow-wrap: anywhere; margin-block: 2px; }

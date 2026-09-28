@@ -488,14 +488,45 @@ function messageHtml(m) {
 // Collapsible "полный лог" — the full working trace (reasoning/tool/steps) for
 // this assistant message. Rendered as a placeholder toggle; content loads from
 // /web/session/:id/trace on first click (see traceToggle click handler).
+// Next to it sits «📋 Сжатый лог» — the friendly digest (buckets with minutes,
+// artifacts grouped, short summary) from /web/session/:id/digest; it loads once
+// per message and reuses the DOM afterwards (see digestToggle click handler).
 function traceToggleHtml() {
   return `
     <div class="trace-block" data-testid="trace-block">
       <button type="button" class="trace-toggle" data-testid="show-trace"
               title="Полный лог процесса: рассуждения, инструменты, шаги"
               aria-expanded="false">🧠 Полный лог</button>
+      <button type="button" class="trace-toggle" data-testid="show-digest"
+              title="Сжатый лог сессии: занятия с минутами, артефакты и сводка"
+              aria-expanded="false">📋 Сжатый лог</button>
       <div class="trace-body hidden"></div>
+      <div class="digest-body hidden" data-testid="digest-body"></div>
     </div>`;
+}
+
+// The digest render: summary first, then activities with minutes, then the
+// artifact groups (PI in its own block — it is personal data, not a link).
+function renderDigest(data) {
+  const parts = [];
+  if (data.summary) parts.push(`<div class="digest-summary">${esc(data.summary)}</div>`);
+  const acts = (Array.isArray(data.activities) ? data.activities : []).filter(a => a && a.label);
+  if (acts.length) {
+    parts.push('<div class="digest-activities">' + acts.map(a =>
+      `<div class="digest-activity">${esc(a.label)} <span class="digest-minutes">${Number(a.minutes) || 0} мин</span></div>`
+    ).join('') + '</div>');
+  }
+  const groups = data.artifacts || {};
+  const group = (items, testid, title) => {
+    if (!Array.isArray(items) || !items.length) return '';
+    return `<div class="digest-group" data-testid="${testid}"><div class="digest-group-title">${title}</div>`
+      + items.map(a => `<div class="digest-item">${esc(String(a.value ?? a))}</div>`).join('') + '</div>';
+  };
+  parts.push(group(groups.pi, 'digest-pi', '🔑 Контакты и PI'));
+  parts.push(group(groups.attributes, 'digest-attributes', '📎 Ссылки и документы'));
+  parts.push(group(groups.other, 'digest-other', 'Прочее'));
+  if (!parts.length) parts.push('<div class="trace-empty">По этой сессии пока нечего показывать.</div>');
+  return parts.join('');
 }
 
 // ─── Copy to clipboard ────────────────────────────────────────────────────────
@@ -634,6 +665,47 @@ document.addEventListener('click', async (e) => {
       }
     } catch (err) {
       body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось загрузить лог')}</div>`;
+    }
+    body.dataset.loaded = '1';
+  }
+  btn.setAttribute('aria-expanded', 'true');
+  body.classList.remove('hidden');
+  scrollBottom();
+});
+
+// «📋 Сжатый лог» — same load-once-then-toggle contract as the trace button
+// above, different body. First click shows «Собираю…» (the agent runs one cheap
+// LLM pass on a cold cache, seconds); everything after that is a DOM toggle.
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-testid="show-digest"]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const block = btn.closest('.trace-block');
+  const body = block && block.querySelector('[data-testid="digest-body"]');
+  if (!body) return;
+  const expanded = btn.getAttribute('aria-expanded') === 'true';
+  if (expanded) {
+    btn.setAttribute('aria-expanded', 'false');
+    body.classList.add('hidden');
+    return;
+  }
+  if (!body.dataset.loaded) {
+    body.innerHTML = '<div class="loading" role="status">Собираю…</div>';
+    body.classList.remove('hidden');
+    try {
+      const res = await api(`/web/session/${encodeURIComponent(currentSessionId)}/digest`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.ok === false) {
+        body.innerHTML = data.error === 'no-digest-local'
+          ? '<div class="trace-empty">Сжатый лог доступен только для сессий агента.</div>'
+          : '<div class="trace-empty">Сжатый лог недоступен для этой сессии.</div>';
+      } else {
+        body.innerHTML = renderDigest(data);
+      }
+    } catch (err) {
+      body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось собрать лог')}</div>`;
     }
     body.dataset.loaded = '1';
   }
