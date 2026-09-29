@@ -481,7 +481,7 @@ function messageHtml(m) {
         m.role === 'assistant' ? md(m.content) : esc(m.content)
       }</div>
       ${attachmentsHtml(m.attachments)}
-      ${m.role === 'assistant' ? traceToggleHtml() : ''}
+      ${m.role === 'assistant' ? traceToggleHtml(m) : ''}
     </div>`;
 }
 
@@ -491,17 +491,24 @@ function messageHtml(m) {
 // Next to it sits «📋 Сжатый лог» — the friendly digest (buckets with minutes,
 // artifacts grouped, short summary) from /web/session/:id/digest; it loads once
 // per message and reuses the DOM afterwards (see digestToggle click handler).
-function traceToggleHtml() {
+// Third: «📋 Посмотреть input» (US-INPUT-01) — the REAL model input of the run
+// that produced THIS answer (keyed by the answer's `at`), shown verbatim in a
+// <pre> with a download; no commentary is ever mixed into the text.
+function traceToggleHtml(m = {}) {
   return `
-    <div class="trace-block" data-testid="trace-block">
+    <div class="trace-block" data-testid="trace-block" data-at="${esc(String(Number(m.at) || ''))}">
       <button type="button" class="trace-toggle" data-testid="show-trace"
               title="Полный лог процесса: рассуждения, инструменты, шаги"
               aria-expanded="false">🧠 Полный лог</button>
       <button type="button" class="trace-toggle" data-testid="show-digest"
               title="Сжатый лог сессии: занятия с минутами, артефакты и сводка"
               aria-expanded="false">📋 Сжатый лог</button>
+      <button type="button" class="trace-toggle" data-testid="show-input"
+              title="Настоящий input, с которым агент делал этот ответ: системный промпт + контекст + задача"
+              aria-expanded="false">📥 Посмотреть input</button>
       <div class="trace-body hidden"></div>
       <div class="digest-body hidden" data-testid="digest-body"></div>
+      <div class="input-body hidden" data-testid="input-body"></div>
     </div>`;
 }
 
@@ -706,6 +713,51 @@ document.addEventListener('click', async (e) => {
       }
     } catch (err) {
       body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось собрать лог')}</div>`;
+    }
+    body.dataset.loaded = '1';
+  }
+  btn.setAttribute('aria-expanded', 'true');
+  body.classList.remove('hidden');
+  scrollBottom();
+});
+
+// «📥 Посмотреть input» — load once per answer, then toggle. The input text goes
+// into the <pre> as-is (textContent — never parsed as markdown/HTML); the only
+// extra UI is a download link for the same bytes, outside the text.
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-testid="show-input"]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const block = btn.closest('.trace-block');
+  const body = block && block.querySelector('[data-testid="input-body"]');
+  if (!body) return;
+  const expanded = btn.getAttribute('aria-expanded') === 'true';
+  if (expanded) {
+    btn.setAttribute('aria-expanded', 'false');
+    body.classList.add('hidden');
+    return;
+  }
+  if (!body.dataset.loaded) {
+    body.innerHTML = '<div class="loading" role="status">Загружаю…</div>';
+    body.classList.remove('hidden');
+    try {
+      const at = block.dataset.at ? `?at=${encodeURIComponent(block.dataset.at)}` : '';
+      const res = await api(`/web/session/${encodeURIComponent(currentSessionId)}/input${at}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.ok === false || typeof data.input !== 'string') {
+        body.innerHTML = data.error === 'no-input-local'
+          ? '<div class="trace-empty">Input есть только у сессий, которые выполнял агент.</div>'
+          : '<div class="trace-empty">Input этого ответа не сохранён (старый запуск: хранятся последние 30).</div>';
+      } else {
+        const href = URL.createObjectURL(new Blob([data.input], { type: 'text/plain;charset=utf-8' }));
+        body.innerHTML = `<a class="input-download" data-testid="input-download" download="agent-input.txt" href="${href}">⬇️ agent-input.txt</a>`
+          + '<pre class="trace-input input-text" data-testid="input-text"></pre>';
+        body.querySelector('[data-testid="input-text"]').textContent = data.input;
+      }
+    } catch (err) {
+      body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось загрузить input')}</div>`;
     }
     body.dataset.loaded = '1';
   }

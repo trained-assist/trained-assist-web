@@ -264,6 +264,26 @@ export class SessionHub {
     }
   }
 
+  // «📋 Посмотреть input» (US-INPUT-01, web channel) — delegates to the agent's
+  // bearer /web/session-input. The agent returns the REAL model input of the run
+  // that produced the answer at `at`, verbatim; we pass it through untouched.
+  async agentInput(username, id, at) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured' };
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/session-input'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, id, ...(at ? { at: Number(at) } : {}) }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent input unavailable' };
+      return { ok: true, status: 200, input: data };
+    } catch {
+      return { ok: false, status: 503, error: 'agent unavailable' };
+    }
+  }
+
   // Copy browser-uploaded bytes from Durable Object storage into the agent's
   // durable intake store before starting real work. The resulting hex ids are
   // the fileRefs contract the agent materializes into media/intake.
@@ -489,8 +509,19 @@ export class SessionHub {
       return json(200, merged);
     }
     if (p.startsWith('/web/session/')) {
-      const parts = p.split('/'); // ['', 'web', 'session', id, 'trace'? | 'digest'?]
+      const parts = p.split('/'); // ['', 'web', 'session', id, 'trace'? | 'digest'? | 'input'?]
       const id = decodeURIComponent(parts[3]);
+      if (parts[4] === 'input') {
+        // Local (imported/demo) sessions never ran through the agent → no input.
+        if (this.sessions.get(id)) return json(200, { ok: false, error: 'no-input-local' });
+        const username = await this.tokenUser(request);
+        const remote = await this.agentInput(username, id, url.searchParams.get('at'));
+        if (!remote.ok) {
+          const status = remote.status === 401 || remote.status === 403 ? 502 : remote.status;
+          return json(status || 502, { error: remote.error || 'agent input unavailable' });
+        }
+        return json(200, remote.input);
+      }
       const trace = parts[4] === 'trace';
       const digest = parts[4] === 'digest';
       if (trace || digest) {
