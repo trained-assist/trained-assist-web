@@ -166,7 +166,7 @@ body {
   flex-shrink: 0;
 }
 .convo-title { font-size: 16px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-project-badge { font-size: 12px; color: var(--text-muted); background: var(--surface-2, #f1f1f1); padding: 3px 10px; border-radius: 99px; flex-shrink: 0; white-space: nowrap; }
+.session-project-badge { font-size: 12px; color: var(--text-muted); background: var(--surface-2, #f1f1f1); padding: 3px 10px; border-radius: 99px; flex-shrink: 0; white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
 .nav-back { color: var(--accent); cursor: pointer; text-decoration: none; font-size: 18px; white-space: nowrap; background: none; border: none; padding: 4px 6px; }
 .nav-back:hover { text-decoration: none; opacity: 0.7; }
 .mobile-only { display: none; }
@@ -612,7 +612,19 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* Unified composer: destination above input, destructive action separated below. */
-.convo-title { white-space: normal; overflow-wrap: anywhere; overflow: visible; max-height: none; }
+/* The session title may be an arbitrarily long token (e.g. a file path). Keep it
+   to two lines with an ellipsis and give it a width floor, so a wide project
+   badge can never squeeze it into a one-character-wide vertical ribbon. */
+.convo-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  max-height: none;
+  min-width: 10rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
 .convo-header { flex-wrap: wrap; max-height: 35dvh; overflow-y: auto; }
 .composer-project, .session-project { overflow-wrap: anywhere; max-width: 100%; }
 .stop-row { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
