@@ -70,6 +70,7 @@ const server = createServer(async (req,res) => {
       state:'done',sessionId:'real-session'
     },409);
     res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: {}\n\n');
+    if (streamMode === 'queued-waiting') res.write('data: {"type":"progress","message":"↪️ Ожидаю завершения предыдущей работы. В этом диалоге выполняю задачи по очереди. Начну автоматически; повторно отправлять не нужно."}\n\n');
     const timer=setTimeout(()=>res.end(streamMode === 'drop' ? '' : 'data: {"type":"done","sessionId":"real-session"}\n\n'),1500);
     res.on('close',()=>clearTimeout(timer));return;
   }
@@ -251,6 +252,7 @@ try {
   await page.waitForFunction(()=>document.getElementById('btn-supplement').classList.contains('hidden'),{timeout:3000});
   assert.equal(posts,postsBeforeSupplement+1,'Дополнить sends exactly one reply, not one per click');
   assert.equal(submissions.at(-1).message,'доп. контекст для перезапуска');
+  assert.match(submissions.at(-1).requestId || '', /^[0-9a-z-]{8,}$/i, 'Ф5: supplement reply carries a requestId (idempotent claim)');
   assert.equal(await page.getByTestId('reply-input').inputValue(),'','composer clears after a confirmed Дополнить');
 
   // Стоп: same confirm gate, cancel leaves the task running, confirm stops it.
@@ -380,7 +382,27 @@ try {
   assert.match(await page.getByTestId('trace-block').innerText(),/хранится 7 дней/);
   await page.getByTestId('show-trace').click();
   assert(await traceBody.isHidden(),'toggle collapses again');
+
+  // ── Ф5 (#61): видимое состояние очереди + admission waiting в activity ──
+  session.status='completed'; session.queued=false;
+  await page.reload(); await page.waitForTimeout(2900);
+  // (a) фаза admission приходит progress-событием и рендерится в activity
+  streamMode='queued-waiting';
+  await page.getByTestId('reply-input').fill('вторая вкладка');
+  await page.getByTestId('send-reply').click();
+  await page.getByTestId('activity').filter({hasText:'Ожидаю завершения предыдущей работы'}).waitFor({timeout:5000});
+  await page.waitForFunction(()=>!document.querySelector('#btn-send').disabled,{timeout:5000});
+  streamMode='done';
+  // (b) queued:true → «⏳ В очереди» в списке и в шапке; после завершения — обратно
+  session.status='running'; session.queued=true;
+  await page.reload(); await page.waitForTimeout(2900);
+  assert.match(await page.getByTestId('session-item').innerText(),/В очереди/,'list badge: accepted-but-waiting is visible');
+  assert.match(await page.locator('#session-status').innerText(),/В очереди/,'header badge: queued state');
+  assert(await page.getByTestId('send-reply').isDisabled(),'a queued session still blocks a third writer');
+  session.status='completed'; session.queued=false;
+  await page.reload(); await page.waitForTimeout(2900);
+  assert(!(await page.locator('#session-status').innerText()).includes('В очереди'),'badge reverts with the run');
   assert.deepEqual(errors,[]);
 
-  console.log('PASS: single right-rail composer (New/Reply, project create/retry, shared file/mic controls, draft isolation, session-list height stable); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); queued auto-send (arm while running, cancel, auto-send exactly once on run end, composer cleared); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert; full-trace toggle expand/collapse');
+  console.log('PASS: single right-rail composer (New/Reply, project create/retry, shared file/mic controls, draft isolation, session-list height stable); per-session reply drafts; upload failure; double click; no repeat POST; busy status; stop position; Стоп/Дополнить confirm gate (empty-input no-op, cancel preserves draft, confirmed Дополнить restarts once, confirmed Стоп reaches backend); queued auto-send (arm while running, cancel, auto-send exactly once on run end, composer cleared); 4 viewports; projects persist/select after refresh failure; summary title; short sessions; real MediaRecorder task/reply dictation; no auto-send; SSE waiting; polling status; mobile layout; no browser errors; reproject modal open/render/move/rename/apply/revert; full-trace toggle expand/collapse; Ф5 queued badge (list+header) + admission waiting text on progress + supplement requestId');
 } finally { await browser.close(); server.closeAllConnections(); await new Promise(r=>server.close(r)); }
