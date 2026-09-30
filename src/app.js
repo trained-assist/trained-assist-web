@@ -41,9 +41,11 @@ function timeAgo(dateStr) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function statusBadge(status) {
+function statusBadge(status, queued = false) {
   const map = {
-    running:   '<span class="badge badge-running">⟳ Running</span>',
+    running: queued
+      ? '<span class="badge badge-queued" title="Принята, ждёт очереди" aria-label="В очереди">⏳ В очереди</span>'
+      : '<span class="badge badge-running">⟳ Running</span>',
     completed: '<span class="badge badge-completed" title="Завершена" aria-label="Завершена">✓</span>',
     failed:    '<span class="badge badge-failed">✕ Failed</span>',
   };
@@ -234,7 +236,7 @@ function renderSessions() {
         <div class="session-meta">${timeAgo(s.lastAt || s.createdAt)}${s.messageCount ? ` · ${s.messageCount} msg` : ''}</div>
         ${(!projectFilter && s.projectId && projectNames.get(s.projectId)) ? `<div class="session-project">${esc(projectNames.get(s.projectId))}</div>` : ''}
       </div>
-      ${statusBadge(s.status)}
+      ${statusBadge(s.status, s.queued)}
     </div>
   `).join('') + toggle;
   el.querySelectorAll('.session-item').forEach(item =>
@@ -771,7 +773,7 @@ function renderSession(session) {
   updateSendLabel();
   const { id, status, messages, lastMessage } = session;
   $('session-title').textContent = sessionTitle(session) || session.path || id;
-  $('session-status').innerHTML = statusBadge(status);
+  $('session-status').innerHTML = statusBadge(status, session.queued);
   const badge = $('session-project-badge');
   const projectName = session.projectId ? projectNames.get(session.projectId) : null;
   if (projectName) { badge.textContent = `📁 ${projectName}`; badge.classList.remove('hidden'); }
@@ -1677,7 +1679,11 @@ async function supplementSession() {
   showRunningControls(false);
   $('stream-area').classList.add('hidden');
   $('reply-input').value = '';
-  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message }, message);
+  // Ф5 (#61): a mutation id makes the supplement claim idempotent — a reconnect
+  // or a repeated click in the same attempt hits the agent's duplicate guard
+  // instead of firing a second stop+reply.
+  const supplementRequestId = (globalThis.crypto?.randomUUID?.() || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await startStream(`/web/reply/${encodeURIComponent(currentSessionId)}`, { message, requestId: supplementRequestId }, message);
 }
 
 // ─── Router ─────────────────────────────────────────────────────────────────

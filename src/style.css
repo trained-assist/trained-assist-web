@@ -265,16 +265,19 @@ input:focus, textarea:focus, select:focus {
   white-space: nowrap;
 }
 .badge-running { background: #fef3c7; color: #92400e; }
+.badge-queued { background: #ede9fe; color: #5b21b6; }
 .badge-completed { background: #d1fae5; color: #065f46; }
 .badge-failed { background: #fee2e2; color: #991b1b; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .badge-running { background: #451a03; color: #fcd34d; }
+  :root:not([data-theme="light"]) .badge-queued { background: #2e1065; color: #c4b5fd; }
   :root:not([data-theme="light"]) .badge-completed { background: #022c22; color: #6ee7b7; }
   :root:not([data-theme="light"]) .badge-failed { background: #450a0a; color: #fca5a5; }
 }
 
 :root[data-theme="dark"] .badge-running { background: #451a03; color: #fcd34d; }
+:root[data-theme="dark"] .badge-queued { background: #2e1065; color: #c4b5fd; }
 :root[data-theme="dark"] .badge-completed { background: #022c22; color: #6ee7b7; }
 :root[data-theme="dark"] .badge-failed { background: #450a0a; color: #fca5a5; }
 
