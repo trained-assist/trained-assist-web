@@ -736,6 +736,28 @@ input:focus, textarea:focus, select:focus {
   font-size: 0.82em;
   margin: 0;
 }
+/* «🔀 Какая модель ответила» — четвёртый тогл: по��еку вызовам модели (llm-ladder
+   /v1/calls через /web/session/:id/ladder). Слово «лестница» в UI не показываем. */
+.models-body {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  padding: 10px 12px;
+  max-height: 55vh;
+  overflow-y: auto;
+  font-size: 0.9em;
+}
+.models-summary { margin-bottom: 8px; color: var(--muted, var(--text)); }
+.models-call { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 6px; }
+.models-call:first-of-type { border-top: 0; margin-top: 0; }
+.models-head { color: var(--muted, var(--text)); font-size: 0.9em; }
+.models-rungs { margin: 4px 0 0; padding-left: 18px; }
+.models-rungs li { margin-block: 2px; font-size: 0.95em; word-break: break-word; }
+.models-ok { color: var(--accent, #4ade80); }
+.models-fail { color: #f87171; }
+.models-step { color: var(--muted, var(--text)); }
+
 .digest-activity { margin-block: 4px; }
 .digest-minutes { color: var(--muted, var(--text)); font-size: 0.85em; }
 .digest-group { margin-top: 10px; }

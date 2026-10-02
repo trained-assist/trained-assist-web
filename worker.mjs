@@ -284,6 +284,27 @@ export class SessionHub {
     }
   }
 
+  // «🪜 Какая модель ответила» — delegates to the agent's bearer /web/session-ladder,
+  // which reads the llm-ladder worker's per-call rung trace (GET /v1/calls): every
+  // model that was tried for this session, in order, with the reason each skipped one
+  // gave. Same delegation shape as agentTrace; nothing is cached or stored here.
+  async agentLadder(username, id, limit) {
+    const base = this.env.AGENT_VERIFY_URL, secret = this.env.AGENT_VERIFY_SECRET;
+    if (!base || !secret) return { ok: false, status: 503, error: 'agent delegation not configured' };
+    try {
+      const r = await fetch(base.replace(/\/web\/verify$/, '/web/session-ladder'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ username, id, ...(limit ? { limit: Number(limit) } : {}) }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent ladder unavailable' };
+      return { ok: true, status: 200, ladder: data };
+    } catch {
+      return { ok: false, status: 503, error: 'agent unavailable' };
+    }
+  }
+
   // Copy browser-uploaded bytes from Durable Object storage into the agent's
   // durable intake store before starting real work. The resulting hex ids are
   // the fileRefs contract the agent materializes into media/intake.
@@ -509,8 +530,20 @@ export class SessionHub {
       return json(200, merged);
     }
     if (p.startsWith('/web/session/')) {
-      const parts = p.split('/'); // ['', 'web', 'session', id, 'trace'? | 'digest'? | 'input'?]
+      const parts = p.split('/'); // ['', 'web', 'session', id, 'trace'? | 'digest'? | 'input'? | 'ladder'?]
       const id = decodeURIComponent(parts[3]);
+      if (parts[4] === 'ladder') {
+        // Which models were tried for this session, in order, and why the skipped ones were
+        // skipped — the ladder's own D1 trace, read on the agent side.
+        if (this.sessions.get(id)) return json(200, { ok: false, error: 'no-ladder-local' });
+        const username = await this.tokenUser(request);
+        const remote = await this.agentLadder(username, id, url.searchParams.get('limit'));
+        if (!remote.ok) {
+          const status = remote.status === 401 || remote.status === 403 ? 502 : remote.status;
+          return json(status || 502, { error: remote.error || 'agent ladder unavailable' });
+        }
+        return json(200, remote.ladder);
+      }
       if (parts[4] === 'input') {
         // Local (imported/demo) sessions never ran through the agent → no input.
         if (this.sessions.get(id)) return json(200, { ok: false, error: 'no-input-local' });

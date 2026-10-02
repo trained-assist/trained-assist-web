@@ -508,9 +508,13 @@ function traceToggleHtml(m = {}) {
       <button type="button" class="trace-toggle" data-testid="show-input"
               title="Настоящий input, с которым агент делал этот ответ: системный промпт + контекст + задача"
               aria-expanded="false">📥 Посмотреть input</button>
+      <button type="button" class="trace-toggle" data-testid="show-models"
+              title="Какая модель ответила и какие модели пробовали до неё — с причиной, почему переключились"
+              aria-expanded="false">🔀 Какая модель ответила</button>
       <div class="trace-body hidden"></div>
       <div class="digest-body hidden" data-testid="digest-body"></div>
       <div class="input-body hidden" data-testid="input-body"></div>
+      <div class="models-body hidden" data-testid="models-body"></div>
     </div>`;
 }
 
@@ -674,6 +678,63 @@ document.addEventListener('click', async (e) => {
       }
     } catch (err) {
       body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось загрузить лог')}</div>`;
+    }
+    body.dataset.loaded = '1';
+  }
+  btn.setAttribute('aria-expanded', 'true');
+  body.classList.remove('hidden');
+  scrollBottom();
+});
+
+// «🔀 Какая модель ответила» — the model ladder's own per-call trace for this
+// session (/web/session/:id/ladder → worker GET /v1/calls). One row per call:
+// what was tried, in order, which model answered and why the ones before it did
+// not. The word «лестница» is deliberately absent from the UI: the user does not
+// know it, and the question they actually have is "which model wrote this".
+function renderModelCalls(data) {
+  const calls = Array.isArray(data && data.calls) ? data.calls : [];
+  if (!calls.length) return '<div class="trace-empty">Модельных вызовов по этой сессии не записано.</div>';
+  const rows = calls.map((c) => {
+    const served = c.ok ? '<span class="models-ok">ответила</span>' : '<span class="models-fail">нет ответа</span>';
+    const rungs = (Array.isArray(c.attempts) ? c.attempts : []).map((a) => {
+      const cls = a.outcome === 'ok' ? 'models-ok' : 'models-step';
+      return `<li class="${cls}"><code>${esc(a.model)}</code> — ${esc(a.outcome)}${a.error ? `: ${esc(String(a.error).slice(0, 160))}` : ''}</li>`;
+    }).join('');
+    const tokens = c.tokens_in != null || c.tokens_out != null ? ` · ${c.tokens_in ?? 0}→${c.tokens_out ?? 0} ток.` : '';
+    return `<div class="models-call">
+<div class="models-head"><code>${esc(c.ladder)}</code> · ${served} · ${c.ms ?? '?'} мс${tokens}</div>
+${rungs ? `<ul class="models-rungs">${rungs}</ul>` : ''}
+</div>`;
+  }).join('');
+  return `<div class="models-summary">${calls.length} модельных вызовов</div>${rows}`;
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-testid="show-models"]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const block = btn.closest('.trace-block');
+  const body = block && block.querySelector('[data-testid="models-body"]');
+  if (!body) return;
+  const expanded = btn.getAttribute('aria-expanded') === 'true';
+  if (expanded) {
+    btn.setAttribute('aria-expanded', 'false');
+    body.classList.add('hidden');
+    return;
+  }
+  if (!body.dataset.loaded) {
+    body.innerHTML = '<div class="loading" role="status">Смотрю, какие модели отвечали…</div>';
+    body.classList.remove('hidden');
+    try {
+      const res = await api(`/web/session/${encodeURIComponent(currentSessionId)}/ladder`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      body.innerHTML = data.ok === false
+        ? '<div class="trace-empty">По этой сессии нет записей о моделях.</div>'
+        : renderModelCalls(data);
+    } catch (err) {
+      body.innerHTML = `<div class="err" role="alert">${esc(err.message || 'Не удалось загрузить модели')}</div>`;
     }
     body.dataset.loaded = '1';
   }
