@@ -31,4 +31,4 @@ npm run dev
 
 Все изменения через feature branch + PR. Runtime/UX изменения не входят в documentation cleanup. Источник актуальных работ — [issues](https://github.com/trained-assist/trained-assist-web/issues) и [Integrator](https://github.com/trained-assist/trained-agent-architecture/issues/140); [целевая модель](https://github.com/trained-assist/trained-agent-architecture/blob/main/ARCHITECTURE.md).
 
-Retiring GCP VM is not a development or fallback target. Use the own Agent Run API and serverless by default; a necessary persistent service belongs on the existing French VM. Other Google services remain allowed. Exit coordination: https://github.com/trained-assist/trained-agent-architecture/issues/145.
+This Web UI runs on the Cloudflare Worker defined by this repository. Do not add new workloads to retiring GCP VM `alesa-personal-assistent/us-central1-a/alesa-vm`; use the Agent Run API and the owning host contracts. Other Google services remain allowed. Exit coordination: https://github.com/trained-assist/trained-agent-architecture/issues/145.
