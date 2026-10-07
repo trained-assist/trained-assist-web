@@ -1,209 +1,34 @@
 # trained-assist-web
 
-**GCP VM exit (05.10.2026):** New work on `alesa-personal-assistent/us-central1-a/alesa-vm` is prohibited. Use serverless by default; the existing French VM only for a proven persistent or local requirement. Other Google services remain allowed. See [the exit plan](https://github.com/trained-assist/trained-agent-architecture/issues/145).
+Пользовательский Web UI Trained Assist: проекты, разговоры/задачи, история, текущие события, запуск, stop, supplementary input и Awaiting user input. Пользователь не должен знать SSH или CLI движка.
 
+Документы содержат действующие требования, контракты и инструкции. Планы выполнения, статусы, ревью прошлых версий и evidence ведутся в GitHub issues/PR/Project. Целевая модель не является утверждением о текущем deployment; его готовность проверяется по конкретным SHA и приёмке.
 
-Веб-интерфейс для пользователей trained-assist — сессион менеджер для конечного пользователя.
+## Runtime и ownership
 
-**Аналог CSM** (`localhost:3000` для оператора), но доступный извне, с авторизацией и фильтрацией по профилю.
+`worker.mjs` — Cloudflare Worker; `SessionHub` Durable Object обслуживает `/web/*` и хранит локальное состояние UI. `wrangler.toml` задаёт Worker, assets из `src/` и DO binding. `src/app.js`, HTML/CSS — клиент. Старый план «Nginx/GCP раздаёт статику из ядра» не является deployment инструкцией этого репозитория.
 
----
+Целевая task/run identity и execution state приходят из control plane/Runner через явный backend adapter. Локальная UI-проекция не создаёт второго orchestration owner. Наличие адаптера не доказывает завершение cutover; bindings и evidence проверяются в issue.
 
-## Контекст
+## Пользовательский контракт
 
-Сейчас пользователи работают через Telegram-бота (`trained-assist-tg-bot`).
-Бот пересылает задачи в `trained-assist-agent` (Node.js на GCP VM), который запускает Claude Code и стримит ответ обратно в Telegram.
+- Sessions list слева, conversation в центре, создание задачи справа.
+- Profile/project scope проверяется на host; пользователь не выбирает произвольный абсолютный путь сервера.
+- Несколько задач/вкладок допустимы; запись в одну сессию сериализуется. Reconnect не теряет и не дублирует сообщения.
+- Receipt, engine state, сохранение файлов и доставка различаются. Pending/unknown не отображаются как успешное завершение.
+- Form/choice и подтверждение credentials продолжают конкретное ожидание. Клик формы сам по себе не запускает агента.
+- Auth secrets и одноразовые tickets не логируются; чужой профиль и session недоступны.
 
-Этот репо добавляет **веб-интерфейс** — пользователь заходит в браузер и видит свои сессии Claude Code: список, историю, статус. Может запустить новую задачу или ответить в существующую — не заходя в терминал и не зная про claude CLI.
+## Проверка
 
-Telegram при этом никуда не девается — оба канала работают параллельно на одном профиле.
-
----
-
-## User story
-
-**Было (Telegram):**
-1. Написал боту задачу текстом
-2. Бот отправил агенту → Claude выполнил → ответ вернулся в чат
-3. Диалог — только в Telegram, история там же
-
-**Стало (веб):**
-1. Открываешь браузер, вводишь логин + пароль
-2. Видишь список своих сессий Claude Code (как CSM, но только твои)
-3. Открываешь нужную — видишь что там происходит, что Claude делал, какие файлы трогал
-4. Можешь написать ответ прямо из браузера (Claude ждёт input)
-5. Можешь запустить новую задачу с выбором папки/проекта
-6. Видишь статус: работает / завершена / ждёт ответа
-
-**Что это не такое:**
-- Не просто чат (это не Telegram-клон в вебе)
-- Не только терминальный вывод — структурированный список сессий с историей
-- Пользователь не должен знать про Claude CLI или SSH
-
----
-
-## Что такое профиль
-
-**Профиль = username** (например `efi`, `recruiter-skillset`).
-
-- Файлы сессий: `~/users/<username>/sessions/`
-- Токены сервисов: `~/agent-tokens/<username>/`
-- Пароль веба: `~/agent-tokens/<username>/.webpasswd` (scrypt хэш)
-
-Один профиль может использоваться из Telegram и веба одновременно.
-История сессий **общая** — что запустил в Telegram, видно в вебе, и наоборот.
-
----
-
-## Архитектура
-
-```
-Browser ──HTTPS──► Nginx ──► trained-assist-agent :3001
-                                 │
-                         новые эндпоинты:
-                         POST /web/auth        → JWT cookie
-                         GET  /web/sessions    → список сессий профиля
-                         GET  /web/session/:id → история + live stream
-                         POST /web/run         → запустить новую задачу (SSE)
-                         POST /web/reply/:id   → ответить в существующую (SSE)
-                         POST /web/stop/:id    → остановить задачу
-                         GET  /web/*           → статика (этот репо)
+```bash
+npm ci
+npm test
+npm run dev
 ```
 
-Фронтенд (этот репо) — статические файлы, отдаются самим агентом.
-Никакого отдельного сервера, никакого SSR.
+Команды и Node requirement — в `package.json`. [Acceptance scenarios](docs/ACCEPTANCE-TESTS.md), [reconnect integrity](test/ui-reconnect-integrity.md) и [session import](docs/IMPORT-SESSIONS-WINDOWS.md) задают локальные проверки; не заменяют cloud cutover acceptance.
 
----
+Все изменения через feature branch + PR. Runtime/UX изменения не входят в documentation cleanup. Источник актуальных работ — [issues](https://github.com/trained-assist/trained-assist-web/issues) и [Integrator](https://github.com/trained-assist/trained-agent-architecture/issues/140); [целевая модель](https://github.com/trained-assist/trained-agent-architecture/blob/main/ARCHITECTURE.md).
 
-## Аутентификация
-
-**Пароли выдаёт оператор через Telegram:**
-
-```
-Оператор: /webpass efi
-Бот: Пароль для efi: xK9mP2qR
-```
-
-Флоу:
-1. Пользователь открывает `/web/login`, вводит username + password
-2. `POST /web/auth` → агент проверяет хэш → устанавливает JWT в httpOnly cookie (24ч)
-3. Все запросы авторизованы через cookie
-
----
-
-## UI (что видит пользователь)
-
-**Главный экран — список сессий:**
-- Список своих сессий (как в CSM: название папки/проекта, статус, время)
-- Статус: `running` / `completed` / `waiting for input` / `failed`
-- Кнопка "Новая задача"
-
-**Экран сессии:**
-- История сообщений (что написал пользователь, что ответил Claude)
-- Текущий стрим — видно что Claude делает сейчас
-- Поле ввода — ответить если Claude ждёт
-- Кнопка "Стоп"
-
----
-
-## Эндпоинты агента (новые)
-
-### `POST /web/auth`
-```json
-{ "username": "efi", "password": "xK9mP2qR" }
-```
-→ устанавливает `httpOnly` cookie `web_token`  
-→ `{ "ok": true, "username": "efi" }`
-
-### `GET /web/sessions`
-→ список сессий профиля (из session-store), последние 20, с полями: id, title, status, created_at, last_message
-
-### `GET /web/session/:id`
-→ история сообщений конкретной сессии + SSE стрим если сессия активна
-
-### `POST /web/run`
-Требует cookie `web_token`
-```json
-{ "task": "напиши пост про ...", "projectPath": "/optional/path" }
-```
-→ SSE стрим:
-```
-data: {"type":"chunk","text":"Пишу..."}
-data: {"type":"done","sessionId":"abc-123"}
-```
-
-### `POST /web/reply/:sessionId`
-```json
-{ "message": "да, продолжай" }
-```
-→ SSE стрим ответа
-
-### `POST /web/stop/:sessionId`
-→ останавливает текущую задачу
-
-### `POST /admin/webpass`
-Требует `Authorization: Bearer <AGENT_SECRET>`
-```json
-{ "username": "efi" }
-```
-→ `{ "password": "xK9mP2qR" }`
-
----
-
-## Изменения в trained-assist-agent
-
-Реализуются отдельной сессией.
-
-### Новые файлы
-- `src/web-auth.js` — scrypt хэши, JWT sign/verify
-- `src/web-routes.js` — все `/web/*` и `/admin/webpass` роуты
-
-### Изменения в существующих
-- `src/server.js` — подключить `web-routes.js`
-- `src/runner.js` — добавить `outputCallback` опцию в `_runTask` (вместо Telegram push)
-- `src/secrets.js` — добавить `WEB_JWT_SECRET` в список
-
-### Новый секрет
-- `WEB_JWT_SECRET` в GCP Secret Manager
-
----
-
-## Изменения в trained-assist-tg-bot
-
-- Команда `/webpass <username>` (только оператор) → вызывает `POST /admin/webpass`, показывает пароль
-
----
-
-## Фронтенд (этот репо)
-
-Vanilla JS + HTML + CSS, без npm-зависимостей.
-
-**Структура:**
-```
-src/
-  index.html       — список сессий + текущая сессия
-  login.html       — форма логина
-  app.js           — логика: SSE, список сессий, auth, reply
-  style.css        — стили
-```
-
-**Деплой:** статика лежит в `src/public/` внутри trained-assist-agent.
-
----
-
-## Порядок реализации
-
-1. **Это ТЗ** — финализируем, отвечаем на открытые вопросы
-2. **Ревью агента** — отдельная сессия читает trained-assist-agent, оценивает что именно менять в runner.js и session-store
-3. **PR в агент** — feature ветка, `src/web-auth.js`, `src/web-routes.js`, правки `runner.js`
-4. **Фронт в этот репо** — HTML/JS/CSS
-5. **PR в tg-bot** — команда `/webpass`
-6. **Деплой** — CI деплоит агент, статика копируется в `src/public/`
-
----
-
-## Открытые вопросы
-
-1. **Домен** — отдельный для веба или через агентовский хост (`<AGENT_HOST>.sslip.io`)?
-2. **Выбор проекта** — при создании новой задачи: фиксированный список папок или свободный ввод пути?
-3. **JWT срок** — 24ч или дольше?
+This Web UI runs on the Cloudflare Worker defined by this repository. Do not add new workloads to retiring GCP VM `alesa-personal-assistent/us-central1-a/alesa-vm`; use the Agent Run API and the owning host contracts. Other Google services remain allowed. Exit coordination: https://github.com/trained-assist/trained-agent-architecture/issues/145.
