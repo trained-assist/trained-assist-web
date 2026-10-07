@@ -2,11 +2,15 @@
 // Static files (index.html, app.js, ...) are served from ./src via the [assets]
 // binding. The API + SSE streams live in a single Durable Object (SessionHub)
 // so session state is consistent across requests and persisted across restarts.
+import { logError } from './src/log.js';
+import { resolveErrorPublisher } from './src/error-publisher.js';
+
 const enc = new TextEncoder();
 const json = (code, obj, extra = {}) =>
   new Response(JSON.stringify(obj), { status: code, headers: { 'content-type': 'application/json', ...extra } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function body(req) { try { return await req.json(); } catch { return {}; } }
+const errMsg = (e) => String((e && e.message) || e || 'error');
 
 // Base64 helpers for storing/serving uploaded file bytes in DO storage. We chunk
 // the byte→string conversion so large files don't blow the argument stack of
@@ -74,6 +78,7 @@ export class SessionHub {
     this.env = env;
     this.sessions = new Map();
     this.seq = 1;
+    this.publishError = resolveErrorPublisher(env);
     // Load persisted state before serving the first request.
     this.state.blockConcurrencyWhile(async () => {
       const stored = await this.state.storage.list({ prefix: 's:' });
@@ -85,6 +90,37 @@ export class SessionHub {
   async persist(s) {
     await this.state.storage.put(`s:${s.id}`, s);
     await this.state.storage.put('seq', this.seq);
+  }
+
+  // Structured error record: a JSON line on stderr plus, when the Error Watcher
+  // is configured, a best-effort C12 ErrorEvent. Publishing is fire-and-forget
+  // and can never block or fail the request it is reported from.
+  reportError(code, summary, extra = {}) {
+    const safeSummary = String(summary == null ? '' : summary).slice(0, 240);
+    const operation = extra.operation || code;
+    const requestId = extra.requestId || null;
+    logError({ event: code, operation, reason: safeSummary, requestId });
+    if (!this.publishError) return;
+    const event = {
+      schemaVersion: 1,
+      eventId: crypto.randomUUID(),
+      occurredAt: new Date().toISOString(),
+      source: { service: 'trained-assist-web', release: this.env.BUILD_SHA || 'unknown', environment: 'production' },
+      scope: { kind: 'platform', tenantId: null, profileId: null },
+      correlation: { userTaskId: null, runId: null, traceId: null, requestId },
+      replyContext: { channel: 'web', destinationRef: null, status: 'web_only' },
+      error: {
+        code,
+        operation,
+        severity: 'error',
+        retryable: true,
+        outcome: 'failed',
+        safeSummary,
+        privateDetailsRef: null,
+      },
+      origin: { kind: 'application', incidentId: null, diagnosticDepth: 0 },
+    };
+    void this.publishError(event).catch(() => {});
   }
 
   newSession(task) {
@@ -218,7 +254,8 @@ export class SessionHub {
       const data = await r.json().catch(() => ({}));
       if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent session unavailable', session: null };
       return { ok: true, status: 200, session: data.session || null };
-    } catch {
+    } catch (e) {
+      this.reportError('SESSION_FETCH_FAILED', errMsg(e), { operation: 'agent_session' });
       return { ok: false, status: 503, error: 'agent unavailable', session: null };
     }
   }
@@ -238,7 +275,8 @@ export class SessionHub {
       const data = await r.json().catch(() => ({}));
       if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent trace unavailable' };
       return { ok: true, status: 200, trace: data };
-    } catch {
+    } catch (e) {
+      this.reportError('TRACE_FETCH_FAILED', errMsg(e), { operation: 'agent_trace' });
       return { ok: false, status: 503, error: 'agent unavailable' };
     }
   }
@@ -259,7 +297,8 @@ export class SessionHub {
       const data = await r.json().catch(() => ({}));
       if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent digest unavailable' };
       return { ok: true, status: 200, digest: data };
-    } catch {
+    } catch (e) {
+      this.reportError('DIGEST_FETCH_FAILED', errMsg(e), { operation: 'agent_digest' });
       return { ok: false, status: 503, error: 'agent unavailable' };
     }
   }
@@ -279,7 +318,8 @@ export class SessionHub {
       const data = await r.json().catch(() => ({}));
       if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent input unavailable' };
       return { ok: true, status: 200, input: data };
-    } catch {
+    } catch (e) {
+      this.reportError('INPUT_FETCH_FAILED', errMsg(e), { operation: 'agent_input' });
       return { ok: false, status: 503, error: 'agent unavailable' };
     }
   }
@@ -300,7 +340,8 @@ export class SessionHub {
       const data = await r.json().catch(() => ({}));
       if (r.status !== 200) return { ok: false, status: r.status, error: data.error || 'agent ladder unavailable' };
       return { ok: true, status: 200, ladder: data };
-    } catch {
+    } catch (e) {
+      this.reportError('LADDER_FETCH_FAILED', errMsg(e), { operation: 'agent_ladder' });
       return { ok: false, status: 503, error: 'agent unavailable' };
     }
   }
@@ -362,8 +403,12 @@ export class SessionHub {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
         body: JSON.stringify({ username, ...payload }),
       });
-    } catch {
-      return { ok: false, status: 503, error: 'agent unavailable' };
+    } catch (e) {
+      this.reportError('AGENT_UNAVAILABLE', errMsg(e), {
+        operation: agentPath,
+        requestId: (payload && payload.requestId) || null,
+      });
+      return { ok: false, status: 503, error: 'agent unavailable', transport: true };
     }
     if (r.status !== 200 || !r.body) {
       // The agent answers JSON with {error}; a 502/504 from the reverse proxy
@@ -605,7 +650,8 @@ export class SessionHub {
           name: pr.label ? `${pr.label}: ${pr.name}` : pr.name,
         }));
         return json(200, { tree });
-      } catch {
+      } catch (e) {
+        this.reportError('PROJECTS_FETCH_FAILED', errMsg(e), { operation: 'files_tree' });
         return json(502, { error: 'Unable to load projects' });
       }
     }
@@ -768,7 +814,16 @@ export class SessionHub {
         requestId: b.requestId || null,
       });
       if (delegated.ok) return delegated.response;
-      if (agentDelegation) return json(delegated.status || 503, { ...(delegated.data || {}), error: delegated.error || 'agent unavailable' });
+      if (agentDelegation) {
+        // Transport throws are already reported as AGENT_UNAVAILABLE inside agentTaskStream.
+        if (!delegated.transport) {
+          this.reportError('RUN_FETCH_FAILED', delegated.error || 'agent run failed', {
+            operation: 'run',
+            requestId: b.requestId || null,
+          });
+        }
+        return json(delegated.status || 503, { ...(delegated.data || {}), error: delegated.error || 'agent unavailable' });
+      }
       const s = this.newSession(b.task);
       if (Array.isArray(b.attachments) && b.attachments.length) s.messages[0].attachments = b.attachments;
       await this.persist(s);
@@ -799,6 +854,14 @@ export class SessionHub {
         requestId: b.requestId || null,
       });
       if (delegated.ok) return delegated.response;
+      if (!delegated.transport) {
+        // «Дополнить» posts {message, requestId} with no attachments key (src/app.js supplementSession).
+        const supplement = !!b.requestId && b.attachments === undefined;
+        this.reportError(supplement ? 'SUPPLEMENT_FETCH_FAILED' : 'REPLY_FETCH_FAILED', delegated.error || 'agent reply failed', {
+          operation: supplement ? 'supplement' : 'reply',
+          requestId: b.requestId || null,
+        });
+      }
       return json(delegated.status || 503, { ...(delegated.data || {}), error: delegated.error || 'agent unavailable' });
     }
     return json(404, { error: 'not found' });
