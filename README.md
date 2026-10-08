@@ -60,3 +60,11 @@ its exact SHA, and checks `/healthz`, the UI, and rejection of an invalid login.
 The current `test:staging` command is local Playwright/test execution; it does
 not deploy a remote environment. Production remains on the existing protected
 workflow and production Worker config.
+
+Sandbox deployment evidence (2026-10-08): source SHA
+`5d9031608b88494c6992db753e86a9edb71c385b` is serving at
+https://trained-assist-web-sandbox.skillset-apply.workers.dev as Worker version
+`7779ea57-0964-4c99-b90b-757b2330fd53`. `/healthz` returned HTTP 200 with the
+exact SHA, `/` returned HTTP 200 and the New Session UI marker, and an invalid
+`/web/auth` password returned HTTP 401. Agent-backed create/reply was not run:
+the sandbox intentionally has no agent endpoint or credentials.
