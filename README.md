@@ -58,8 +58,8 @@ before deploying the selected commit, sets the sandbox password, deploys with
 its exact SHA, and checks `/healthz`, the UI, and rejection of an invalid login.
 
 The current `test:staging` command is local Playwright/test execution; it does
-not deploy a remote environment. Production remains on the existing protected
-workflow and production Worker config.
+not deploy a remote environment. Production remains on the existing main-branch deployment workflow and production
+Worker config; this sandbox workflow does not change that path.
 
 Sandbox deployment evidence (2026-10-08): source SHA
 `5d9031608b88494c6992db753e86a9edb71c385b` is serving at
