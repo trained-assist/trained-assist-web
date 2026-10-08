@@ -51,7 +51,7 @@ route, agent endpoint, credentials, or storage binding. This is a deployment
 and UI/auth smoke target; it does not exercise agent-backed create/reply flows.
 
 Set up the GitHub `web-sandbox` Environment with variable `CF_ACCOUNT_ID` and
-secrets `CF_API_TOKEN` (a scoped Cloudflare token for this account and Worker
+secrets `SANDBOX_CF_API_TOKEN` (a Cloudflare token scoped to this account and Worker
 script/asset/secret deployment) and `DEMO_PASSWORD` (sandbox-only). Then run
 **Deploy sandbox** manually and type `SANDBOX`. The workflow runs `npm test`
 before deploying the selected commit, sets the sandbox password, deploys with
