@@ -1,0 +1,18 @@
+# Isolated Web sandbox. This Worker has its own Durable Object namespace and
+# no production route, agent credentials, or state bindings.
+name = "trained-assist-web-sandbox"
+main = "worker.mjs"
+compatibility_date = "2024-11-06"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./src"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "SESSION_HUB"
+class_name = "SessionHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionHub"]

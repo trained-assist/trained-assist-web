@@ -41,3 +41,22 @@ npm run dev
 Все изменения через feature branch + PR. Runtime/UX изменения не входят в documentation cleanup. Источник актуальных работ — [issues](https://github.com/trained-assist/trained-assist-web/issues) и [Integrator](https://github.com/trained-assist/trained-agent-architecture/issues/140); [целевая модель](https://github.com/trained-assist/trained-agent-architecture/blob/main/ARCHITECTURE.md).
 
 This Web UI runs on the Cloudflare Worker defined by this repository. Do not add new workloads to retiring GCP VM `alesa-personal-assistent/us-central1-a/alesa-vm`; use the Agent Run API and the owning host contracts. Other Google services remain allowed. Exit coordination: https://github.com/trained-assist/trained-agent-architecture/issues/145.
+
+## Isolated sandbox deployment
+
+A separate manual workflow deploys a Worker named
+`trained-assist-web-sandbox` to its workers.dev URL. Its Durable Object
+namespace is separate from production. The config contains no production
+route, agent endpoint, credentials, or storage binding. This is a deployment
+and UI/auth smoke target; it does not exercise agent-backed create/reply flows.
+
+Set up the GitHub `web-sandbox` Environment with variable `CF_ACCOUNT_ID` and
+secrets `CF_API_TOKEN` (a scoped Cloudflare token for this account and Worker
+script/asset/secret deployment) and `DEMO_PASSWORD` (sandbox-only). Then run
+**Deploy sandbox** manually and type `SANDBOX`. The workflow runs `npm test`
+before deploying the selected commit, sets the sandbox password, deploys with
+its exact SHA, and checks `/healthz`, the UI, and rejection of an invalid login.
+
+The current `test:staging` command is local Playwright/test execution; it does
+not deploy a remote environment. Production remains on the existing protected
+workflow and production Worker config.
