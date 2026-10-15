@@ -8,6 +8,8 @@
 
 `worker.mjs` — Cloudflare Worker; `SessionHub` Durable Object обслуживает `/web/*` и хранит локальное состояние UI. `wrangler.toml` задаёт Worker, assets из `src/` и DO binding. `src/app.js`, HTML/CSS — клиент. Старый план «Nginx/GCP раздаёт статику из ядра» не является deployment инструкцией этого репозитория.
 
+`/welcome.html` — отдельная презентационная главная Trained Assist; она не заменяет корневой агентский UI. CTA ведёт на same-origin `/login.html`, чтобы вход и cookie оставались на origin приложения. После выбора домена можно назначить этот маршрут главной отдельно, не меняя агентский экран.
+
 Целевая task/run identity и execution state приходят из control plane/Runner через явный backend adapter. Локальная UI-проекция не создаёт второго orchestration owner. Наличие адаптера не доказывает завершение cutover; bindings и evidence проверяются в issue.
 
 ## Пользовательский контракт
