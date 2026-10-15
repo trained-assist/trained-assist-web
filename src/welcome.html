@@ -1,91 +1,279 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f5ef">
-  <meta name="description" content="Trained Assist — рабочее пространство для задач с ИИ-агентом: контекст, инструменты и следующий шаг в одном месте.">
-  <title>Trained Assist — работа, которую можно продолжить</title>
-  <link rel="stylesheet" href="welcome.css">
-</head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="/welcome.html" aria-label="Trained Assist — главная">
-      <span class="brand-mark" aria-hidden="true">ta</span>
-      <span>trained<span class="brand-light">assist</span></span>
-    </a>
-    <nav class="desktop-nav" aria-label="Основная навигация">
-      <a href="#how">Как это работает</a>
-      <a href="#workspace">Рабочее пространство</a>
-      <a href="#questions">Вопросы</a>
-    </nav>
-    <a class="button button-small button-dark" href="/login.html" data-testid="landing-login-top">Войти <span aria-hidden="true">↗</span></a>
-  </header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f5ef" />
+    <meta
+      name="description"
+      content="Trained Assist — рабочее пространство для задач с ИИ-агентом: контекст, инструменты и следующий шаг в одном месте."
+    />
+    <title>Trained Assist — работа, которую можно продолжить</title>
+    <link rel="stylesheet" href="welcome.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a
+        class="brand"
+        href="/welcome.html"
+        aria-label="Trained Assist — главная"
+      >
+        <span class="brand-mark" aria-hidden="true">ta</span>
+        <span>trained<span class="brand-light">assist</span></span>
+      </a>
+      <nav class="desktop-nav" aria-label="Основная навигация">
+        <a href="#how">Как это работает</a>
+        <a href="#workspace">Рабочее пространство</a>
+        <a href="#questions">Вопросы</a>
+      </nav>
+      <a
+        class="button button-small button-dark"
+        href="/login.html"
+        data-testid="landing-login-top"
+        >Войти <span aria-hidden="true">↗</span></a
+      >
+    </header>
 
-  <main>
-    <section class="hero section-wrap">
-      <div class="hero-copy">
-        <div class="eyebrow"><span class="pulse" aria-hidden="true"></span> РАБОЧЕЕ ПРОСТРАНСТВО С ИИ-АГЕНТОМ</div>
-        <h1>Не просто спросить.<br><span>Довести до результата.</span></h1>
-        <p class="hero-lede">Trained Assist помогает вести настоящие рабочие задачи: сохранять контекст, подключать нужные инструменты и продолжать с того места, где остановились.</p>
-        <div class="hero-actions">
-          <a class="button button-dark" href="/login.html" data-testid="landing-login-hero">Открыть приложение <span aria-hidden="true">↗</span></a>
-          <a class="text-link" href="#how">Посмотреть, как устроено <span aria-hidden="true">↓</span></a>
+    <main>
+      <section class="hero section-wrap">
+        <div class="hero-copy">
+          <div class="eyebrow">
+            <span class="pulse" aria-hidden="true"></span> РАБОЧЕЕ ПРОСТРАНСТВО
+            С ИИ-АГЕНТОМ
+          </div>
+          <h1>Не просто спросить.<br /><span>Довести до результата.</span></h1>
+          <p class="hero-lede">
+            Trained Assist помогает вести настоящие рабочие задачи: сохранять
+            контекст, подключать нужные инструменты и продолжать с того места,
+            где остановились.
+          </p>
+          <div class="hero-actions">
+            <a
+              class="button button-dark"
+              href="/login.html"
+              data-testid="landing-login-hero"
+              >Открыть приложение <span aria-hidden="true">↗</span></a
+            >
+            <a class="text-link" href="#how"
+              >Посмотреть, как устроено <span aria-hidden="true">↓</span></a
+            >
+          </div>
+          <div class="hero-note">
+            <span class="note-icon" aria-hidden="true">✳</span
+            ><span>Для задач, которым мало одного сообщения</span>
+          </div>
         </div>
-        <div class="hero-note"><span class="note-icon" aria-hidden="true">✳</span><span>Для задач, которым мало одного сообщения</span></div>
-      </div>
 
-      <div class="hero-visual" aria-label="Пример рабочего процесса Trained Assist">
-        <div class="visual-orbit orbit-one"></div>
-        <div class="visual-orbit orbit-two"></div>
-        <div class="task-card">
-          <div class="task-card-top"><span class="window-dots"><i></i><i></i><i></i></span><span class="task-label">РАБОЧАЯ СЕССИЯ</span><span class="task-menu">···</span></div>
-          <div class="task-title-row"><div class="task-icon">✳</div><div><span class="task-kicker">ПОДБОР · ЗАДАЧА 014</span><h2>Разобрать вакансию</h2></div></div>
-          <div class="task-message user-message"><span class="avatar avatar-user">В</span><p>Сравни требования с профилем кандидата и подготовь вопросы для интервью.</p></div>
-          <div class="task-message agent-message"><span class="avatar avatar-agent">✳</span><div><p>Сначала выделю обязательные требования, затем сопоставлю их с опытом. Если данных не хватит — отмечу это отдельно.</p><div class="agent-status"><span class="status-dot"></span> Изучаю материалы <span class="status-time">только что</span></div></div></div>
-          <div class="task-tools"><span class="tool-chip"><span class="tool-glyph">↗</span> вакансия</span><span class="tool-chip"><span class="tool-glyph">▤</span> профиль кандидата</span><span class="tool-chip tool-more">+ инструменты</span></div>
-          <div class="task-input"><span>Добавить контекст или уточнение…</span><span class="send-button">↑</span></div>
-          <div class="card-foot"><span><span class="foot-dot"></span> Контекст сохранён</span><span>сессия · 08:42</span></div>
+        <div
+          class="hero-visual"
+          aria-label="Пример рабочего процесса Trained Assist"
+        >
+          <div class="visual-orbit orbit-one"></div>
+          <div class="visual-orbit orbit-two"></div>
+          <div class="task-card">
+            <div class="task-card-top">
+              <span class="window-dots"><i></i><i></i><i></i></span
+              ><span class="task-label">РАБОЧАЯ СЕССИЯ</span
+              ><span class="task-menu">···</span>
+            </div>
+            <div class="task-title-row">
+              <div class="task-icon">✳</div>
+              <div>
+                <span class="task-kicker">ПОДБОР · ЗАДАЧА 014</span>
+                <h2>Разобрать вакансию</h2>
+              </div>
+            </div>
+            <div class="task-message user-message">
+              <span class="avatar avatar-user">В</span>
+              <p>
+                Сравни требования с профилем кандидата и подготовь вопросы для
+                интервью.
+              </p>
+            </div>
+            <div class="task-message agent-message">
+              <span class="avatar avatar-agent">✳</span>
+              <div>
+                <p>
+                  Сначала выделю обязательные требования, затем сопоставлю их с
+                  опытом. Если данных не хватит — отмечу это отдельно.
+                </p>
+                <div class="agent-status">
+                  <span class="status-dot"></span> Изучаю материалы
+                  <span class="status-time">только что</span>
+                </div>
+              </div>
+            </div>
+            <div class="task-tools">
+              <span class="tool-chip"
+                ><span class="tool-glyph">↗</span> вакансия</span
+              ><span class="tool-chip"
+                ><span class="tool-glyph">▤</span> профиль кандидата</span
+              ><span class="tool-chip tool-more">+ инструменты</span>
+            </div>
+            <div class="task-input">
+              <span>Добавить контекст или уточнение…</span
+              ><span class="send-button">↑</span>
+            </div>
+            <div class="card-foot">
+              <span><span class="foot-dot"></span> Контекст сохранён</span
+              ><span>сессия · 08:42</span>
+            </div>
+          </div>
+          <div class="floating-note">
+            <span class="floating-check">✓</span
+            ><span
+              ><b>Работа продолжается</b
+              ><small>История и следующий шаг рядом</small></span
+            >
+          </div>
+          <div class="visual-caption">ОДНА ЗАДАЧА — ЦЕЛЫЙ РАБОЧИЙ ПОТОК</div>
         </div>
-        <div class="floating-note"><span class="floating-check">✓</span><span><b>Работа продолжается</b><small>История и следующий шаг рядом</small></span></div>
-        <div class="visual-caption">ОДНА ЗАДАЧА — ЦЕЛЫЙ РАБОЧИЙ ПОТОК</div>
-      </div>
-      <div class="hero-bottom"><span>МОЖНО НАЧАТЬ С МАЛЕНЬКОЙ ЗАДАЧИ</span><span class="bottom-rule"></span><span>И ВЕРНУТЬСЯ К БОЛЬШОЙ</span></div>
-    </section>
+        <div class="hero-bottom">
+          <span>МОЖНО НАЧАТЬ С МАЛЕНЬКОЙ ЗАДАЧИ</span
+          ><span class="bottom-rule"></span><span>И ВЕРНУТЬСЯ К БОЛЬШОЙ</span>
+        </div>
+      </section>
 
-    <section class="intro section-wrap" id="workspace">
-      <div class="section-label"><span>01</span> НЕ ЧАТ, А РАБОЧИЙ ПРОЦЕСС</div>
-      <div class="intro-grid"><h2>У задачи есть<br>память. И продолжение.</h2><p>Вместо нового диалога каждый раз — рабочая сессия, где видны ход задачи, материалы и то, что нужно сделать дальше. Вы остаётесь в процессе и можете направить агента, когда это важно.</p></div>
-      <div class="feature-grid">
-        <article class="feature-card feature-dark"><div class="feature-number">A / 01</div><div class="feature-symbol symbol-lime">↗</div><h3>Начните с цели</h3><p>Опишите результат своими словами. Агент разложит работу на понятные шаги и спросит, если не хватает контекста.</p><span class="feature-line"></span></article>
-        <article class="feature-card"><div class="feature-number">A / 02</div><div class="feature-symbol symbol-blue">⌘</div><h3>Дайте нужные инструменты</h3><p>Подключайте рабочие источники и сервисы по мере необходимости — не превращая каждый запрос в ручную пересылку данных.</p><span class="feature-line"></span></article>
-        <article class="feature-card"><div class="feature-number">A / 03</div><div class="feature-symbol symbol-peach">⤴</div><h3>Оставайтесь в контуре</h3><p>Смотрите, что уже сделано, добавляйте вводные и принимайте решения в точках, где нужен именно ваш выбор.</p><span class="feature-line"></span></article>
-      </div>
-    </section>
+      <section class="intro section-wrap" id="workspace">
+        <div class="section-label">
+          <span>01</span> НЕ ЧАТ, А РАБОЧИЙ ПРОЦЕСС
+        </div>
+        <div class="intro-grid">
+          <h2>У задачи есть<br />память. И продолжение.</h2>
+          <p>
+            Вместо нового диалога каждый раз — рабочая сессия, где видны ход
+            задачи, материалы и то, что нужно сделать дальше. Вы остаётесь в
+            процессе и можете направить агента, когда это важно.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card feature-dark">
+            <div class="feature-number">A / 01</div>
+            <div class="feature-symbol symbol-lime">↗</div>
+            <h3>Начните с цели</h3>
+            <p>
+              Опишите результат своими словами. Агент разложит работу на
+              понятные шаги и спросит, если не хватает контекста.
+            </p>
+            <span class="feature-line"></span>
+          </article>
+          <article class="feature-card">
+            <div class="feature-number">A / 02</div>
+            <div class="feature-symbol symbol-blue">⌘</div>
+            <h3>Дайте нужные инструменты</h3>
+            <p>
+              Подключайте рабочие источники и сервисы по мере необходимости — не
+              превращая каждый запрос в ручную пересылку данных.
+            </p>
+            <span class="feature-line"></span>
+          </article>
+          <article class="feature-card">
+            <div class="feature-number">A / 03</div>
+            <div class="feature-symbol symbol-peach">⤴</div>
+            <h3>Оставайтесь в контуре</h3>
+            <p>
+              Смотрите, что уже сделано, добавляйте вводные и принимайте решения
+              в точках, где нужен именно ваш выбор.
+            </p>
+            <span class="feature-line"></span>
+          </article>
+        </div>
+      </section>
 
-    <section class="how section-wrap" id="how">
-      <div class="how-heading"><div class="section-label"><span>02</span> ПРОСТО НАЧАТЬ</div><h2>От задачи —<br>к следующему шагу.</h2></div>
-      <div class="steps">
-        <article class="step"><span class="step-index">01</span><div><h3>Сформулируйте, что нужно</h3><p>Не подбирайте идеальный промпт. Расскажите про задачу и желаемый результат.</p></div><span class="step-arrow">↘</span></article>
-        <article class="step"><span class="step-index">02</span><div><h3>Подключите контекст</h3><p>Добавьте документы, профиль или инструмент, который действительно нужен этой работе.</p></div><span class="step-arrow">↘</span></article>
-        <article class="step"><span class="step-index">03</span><div><h3>Продолжайте вместе</h3><p>Уточняйте, проверяйте важное и возвращайтесь к сессии, когда появится новый ввод.</p></div><span class="step-arrow">↗</span></article>
-      </div>
-    </section>
+      <section class="how section-wrap" id="how">
+        <div class="how-heading">
+          <div class="section-label"><span>02</span> ПРОСТО НАЧАТЬ</div>
+          <h2>От задачи —<br />к следующему шагу.</h2>
+        </div>
+        <div class="steps">
+          <article class="step">
+            <span class="step-index">01</span>
+            <div>
+              <h3>Сформулируйте, что нужно</h3>
+              <p>
+                Не подбирайте идеальный промпт. Расскажите про задачу и желаемый
+                результат.
+              </p>
+            </div>
+            <span class="step-arrow">↘</span>
+          </article>
+          <article class="step">
+            <span class="step-index">02</span>
+            <div>
+              <h3>Подключите контекст</h3>
+              <p>
+                Добавьте документы, профиль или инструмент, который
+                действительно нужен этой работе.
+              </p>
+            </div>
+            <span class="step-arrow">↘</span>
+          </article>
+          <article class="step">
+            <span class="step-index">03</span>
+            <div>
+              <h3>Продолжайте вместе</h3>
+              <p>
+                Уточняйте, проверяйте важное и возвращайтесь к сессии, когда
+                появится новый ввод.
+              </p>
+            </div>
+            <span class="step-arrow">↗</span>
+          </article>
+        </div>
+      </section>
 
-    <section class="closing section-wrap">
-      <div class="closing-mark" aria-hidden="true">✳</div>
-      <div><div class="eyebrow">ВАШ СЛЕДУЮЩИЙ РАБОЧИЙ ШАГ</div><h2>Начните с того,<br>что уже на столе.</h2></div>
-      <div class="closing-action"><p>Войдите в Trained Assist и продолжите работу с задачами в одном пространстве.</p><a class="button button-lime" href="/login.html" data-testid="landing-login-bottom">Войти в приложение <span aria-hidden="true">↗</span></a></div>
-    </section>
+      <section class="closing section-wrap">
+        <div class="closing-mark" aria-hidden="true">✳</div>
+        <div>
+          <div class="eyebrow">ВАШ СЛЕДУЮЩИЙ РАБОЧИЙ ШАГ</div>
+          <h2>Начните с того,<br />что уже на столе.</h2>
+        </div>
+        <div class="closing-action">
+          <p>
+            Войдите в Trained Assist и продолжите работу с задачами в одном
+            пространстве.
+          </p>
+          <a
+            class="button button-lime"
+            href="/login.html"
+            data-testid="landing-login-bottom"
+            >Войти в приложение <span aria-hidden="true">↗</span></a
+          >
+        </div>
+      </section>
 
-    <section class="faq section-wrap" id="questions">
-      <div class="section-label"><span>03</span> КОРОТКО О ГЛАВНОМ</div>
-      <details><summary>Это обычный чат с ИИ?</summary><p>Чат — только способ взаимодействия. Trained Assist организует работу вокруг задач и рабочих сессий, чтобы видеть контекст и продолжение.</p></details>
-      <details><summary>Нужно ли сразу подключать все сервисы?</summary><p>Нет. Начните с задачи и добавляйте только те источники и инструменты, которые нужны для неё.</p></details>
-      <details><summary>Как войти?</summary><p>Откройте приложение. Для входа через Telegram получите одноразовый код у бота в личном чате и введите его на странице авторизации.</p></details>
-    </section>
-  </main>
+      <section class="faq section-wrap" id="questions">
+        <div class="section-label"><span>03</span> КОРОТКО О ГЛАВНОМ</div>
+        <details>
+          <summary>Это обычный чат с ИИ?</summary>
+          <p>
+            Чат — только способ взаимодействия. Trained Assist организует работу
+            вокруг задач и рабочих сессий, чтобы видеть контекст и продолжение.
+          </p>
+        </details>
+        <details>
+          <summary>Нужно ли сразу подключать все сервисы?</summary>
+          <p>
+            Нет. Начните с задачи и добавляйте только те источники и
+            инструменты, которые нужны для неё.
+          </p>
+        </details>
+        <details>
+          <summary>Как войти?</summary>
+          <p>
+            Откройте приложение. Для входа через Telegram получите одноразовый
+            код у бота в личном чате и введите его на странице авторизации.
+          </p>
+        </details>
+      </section>
+    </main>
 
-  <footer class="footer section-wrap"><a class="brand" href="/welcome.html"><span class="brand-mark" aria-hidden="true">ta</span><span>trained<span class="brand-light">assist</span></span></a><span>Рабочее пространство с ИИ-агентом</span><a href="/login.html">Войти <span aria-hidden="true">↗</span></a></footer>
-</body>
+    <footer class="footer section-wrap">
+      <a class="brand" href="/welcome.html"
+        ><span class="brand-mark" aria-hidden="true">ta</span
+        ><span>trained<span class="brand-light">assist</span></span></a
+      ><span>Рабочее пространство с ИИ-агентом</span
+      ><a href="/login.html">Войти <span aria-hidden="true">↗</span></a>
+    </footer>
+  </body>
 </html>
