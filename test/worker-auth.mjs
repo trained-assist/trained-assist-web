@@ -55,5 +55,30 @@ try {
     assert.equal(map.get(`t:${tok}`).username, 'demo-profile');
     assert.equal((await auth(hub, { password: 'wrong' })).status, 401);
   }
+  // 5. Telegram identity code is redeemed server-to-server and mints the same
+  // HttpOnly web session, bound to the identity's legacy agent profile.
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://identity.example/v1/links/telegram/redeem');
+    assert.equal(init.headers.authorization, 'Bearer web-client-secret');
+    assert.deepEqual(JSON.parse(init.body), { code: '23456789ABCD' });
+    return Response.json({ user_id: 'usr_0123456789abcdef0123456789abcdef', agent_username: 'alice' }, { status: 201 });
+  };
+  {
+    const { hub, map } = makeHub({ IDENTITY_API_URL: 'https://identity.example', IDENTITY_WEB_CLIENT_TOKEN: 'web-client-secret' });
+    const res = await auth(hub, { telegram_code: '23456789ABCD' });
+    assert.equal(res.status, 200);
+    const token = res.headers.get('set-cookie').match(/web_token=([^;]+)/)[1];
+    assert.deepEqual(map.get(`t:${token}`), {
+      at: map.get(`t:${token}`).at,
+      username: 'alice',
+      userId: 'usr_0123456789abcdef0123456789abcdef',
+      via: 'telegram-identity',
+    });
+    assert.equal(res.headers.get('set-cookie').includes('HttpOnly'), true);
+  }
+  {
+    const { hub } = makeHub({ IDENTITY_API_URL: 'https://identity.example', IDENTITY_WEB_CLIENT_TOKEN: 'web-client-secret' });
+    assert.equal((await auth(hub, { telegram_code: 'not-a-valid-code' })).status, 401);
+  }
 } finally { globalThis.fetch = realFetch; }
 console.log('worker-auth: ok');

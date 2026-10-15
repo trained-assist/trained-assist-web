@@ -437,13 +437,16 @@ export class SessionHub {
     const AGENT_VERIFY = this.env.AGENT_VERIFY_URL || null;
     const AGENT_VERIFY_SECRET = this.env.AGENT_VERIFY_SECRET || null;
     const agentDelegation = !!(AGENT_VERIFY && AGENT_VERIFY_SECRET);
+    const IDENTITY_API_URL = this.env.IDENTITY_API_URL || null;
+    const IDENTITY_WEB_CLIENT_TOKEN = this.env.IDENTITY_WEB_CLIENT_TOKEN || null;
+    const identityLogin = !!(IDENTITY_API_URL && IDENTITY_WEB_CLIENT_TOKEN);
 
     if (p === '/healthz') return json(200, { ok: true, buildSha: this.env.BUILD_SHA || null });
 
     // Fail closed: a deploy with NO way to verify a password (neither a local
     // DEMO_PASSWORD nor agent delegation) is LOCKED, never open. This is a
     // powerful tool behind a public URL — better a broken login than a back door.
-    if (!PW && !agentDelegation) {
+    if (!PW && !agentDelegation && !identityLogin) {
       if (p === '/web/auth' && m === 'POST') return json(503, { error: 'Auth not configured' });
       return json(503, { error: 'Locked: server password not configured' });
     }
@@ -488,8 +491,40 @@ export class SessionHub {
     if (p === '/web/auth' && m === 'POST') {
       const b = await body(request);
       let ok = false;
+      let identityUserId = null;
+      let identityAgentUsername = null;
+      if (typeof b.telegram_code === 'string') {
+        // Telegram link codes are redeemed only server-to-server. The web-client
+        // secret and the code never leave this Worker for the browser/session store.
+        const code = b.telegram_code.trim().toUpperCase();
+        if (!/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{12}$/.test(code) || !identityLogin) {
+          return json(401, { error: 'Invalid or expired Telegram code' });
+        }
+        try {
+          const identityOrigin = new URL(IDENTITY_API_URL);
+          if (identityOrigin.protocol !== 'https:' || identityOrigin.username || identityOrigin.password) {
+            return json(503, { error: 'Identity login is not configured securely' });
+          }
+          const r = await fetch(new URL('/v1/links/telegram/redeem', identityOrigin), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${IDENTITY_WEB_CLIENT_TOKEN}` },
+            body: JSON.stringify({ code }),
+          });
+          if (!r.ok) return json(r.status === 400 ? 401 : 503, { error: r.status === 400 ? 'Invalid or expired Telegram code' : 'Identity service unavailable' });
+          const result = await r.json();
+          if (!/^usr_[a-f0-9]{32}$/.test(result.user_id || '')
+              || !/^[A-Za-z0-9_-]{1,64}$/.test(result.agent_username || '')) {
+            return json(503, { error: 'Identity service returned an invalid login' });
+          }
+          ok = true;
+          identityUserId = result.user_id;
+          identityAgentUsername = result.agent_username;
+        } catch {
+          return json(503, { error: 'Identity service unavailable' });
+        }
+      }
       // Primary path: ask the agent to validate against its password store.
-      if (agentDelegation && b.password) {
+      if (!ok && agentDelegation && b.password) {
         const username = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
           ? b.username
           : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
@@ -513,11 +548,11 @@ export class SessionHub {
       // Resolve which profile logged in, so /web/sessions can pull THAT
       // profile's real Telegram sessions from the agent. Falls back to the
       // configured default profile when the form omits a username.
-      const loggedUser = (agentDelegation && b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+      const loggedUser = identityAgentUsername || ((agentDelegation && b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
         ? b.username
-        : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
+        : (this.env.AGENT_USERNAME || 'trained-assist-product-owner'));
       const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
-      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: loggedUser });
+      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: loggedUser, ...(identityUserId ? { userId: identityUserId, via: 'telegram-identity' } : {}) });
       const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
       return json(200, { ok: true }, { 'set-cookie': cookie });
     }

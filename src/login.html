@@ -1,16 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in — Claude Assistant</title>
+  <title>Вход — Trained Assist</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="auth-page">
     <div class="auth-card">
-      <h1>Claude Assistant</h1>
+      <h1>Trained Assist</h1>
       <form id="form" data-testid="login-form">
+        <div id="password-fields">
         <div class="field">
           <label for="username">Username</label>
           <input type="text" id="username" data-testid="login-username" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus required>
@@ -19,18 +20,39 @@
           <label for="password">Access Password</label>
           <input type="password" id="password" data-testid="login-password" autocomplete="current-password" required>
         </div>
+        </div>
+        <div id="telegram-fields" class="hidden">
+          <p>В личном чате с ботом отправь <code>/web_authorization</code>, затем введи сюда выданный код. Если бот попросит — сначала войди там командой <code>/login</code>.</p>
+          <div class="field">
+            <label for="telegram-code">Одноразовый код</label>
+            <input type="text" id="telegram-code" data-testid="login-telegram-code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="12" pattern="[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{12}">
+          </div>
+        </div>
         <button type="submit" class="btn btn-primary" data-testid="login-submit" style="width:100%;justify-content:center">Sign in</button>
         <div id="err" class="err hidden" data-testid="login-error" role="alert" aria-live="assertive"></div>
       </form>
+      <button type="button" id="toggle-login" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:12px">Войти через Telegram-код</button>
     </div>
   </div>
   <script>
+    let telegramMode = false;
+    const toggle = document.getElementById('toggle-login');
+    toggle.addEventListener('click', () => {
+      telegramMode = !telegramMode;
+      document.getElementById('password-fields').classList.toggle('hidden', telegramMode);
+      document.getElementById('telegram-fields').classList.toggle('hidden', !telegramMode);
+      document.getElementById('username').required = !telegramMode;
+      document.getElementById('password').required = !telegramMode;
+      document.getElementById('telegram-code').required = telegramMode;
+      toggle.textContent = telegramMode ? 'Войти по логину и паролю' : 'Войти через Telegram-код';
+      document.querySelector('#form button[type=submit]').textContent = telegramMode ? 'Войти' : 'Sign in';
+    });
     document.getElementById('form').addEventListener('submit', async e => {
       e.preventDefault();
       const btn = e.target.querySelector('button[type=submit]');
       const err = document.getElementById('err');
       btn.disabled = true;
-      btn.textContent = 'Signing in…';
+      btn.textContent = 'Проверяю…';
       err.classList.add('hidden');
 
       try {
@@ -38,17 +60,19 @@
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.stringify(telegramMode ? {
+            telegram_code: document.getElementById('telegram-code').value.trim().toUpperCase()
+          } : {
             username: document.getElementById('username').value.trim(),
             password: document.getElementById('password').value
           })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          err.textContent = data.error || 'Invalid username or password';
+          err.textContent = data.error || (telegramMode ? 'Код неверный или устарел' : 'Неверный логин или пароль');
           err.classList.remove('hidden');
           btn.disabled = false;
-          btn.textContent = 'Sign in';
+          btn.textContent = telegramMode ? 'Войти' : 'Sign in';
           return;
         }
         // Auth is a httpOnly cookie set by the server — nothing to store client-side.
@@ -57,7 +81,7 @@
         err.textContent = 'Connection error. Try again.';
         err.classList.remove('hidden');
         btn.disabled = false;
-        btn.textContent = 'Sign in';
+        btn.textContent = telegramMode ? 'Войти' : 'Sign in';
       }
     });
   </script>
