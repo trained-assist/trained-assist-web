@@ -31,8 +31,8 @@ try {
   );
   assert.equal(await page.locator(".feature-card").count(), 3);
   assert.equal(
-    await page.getByTestId("landing-login-hero").getAttribute("href"),
-    "https://app.trainedassist.store/login.html",
+    await page.getByTestId("landing-signup-hero").getAttribute("href"),
+    "https://app.trainedassist.store/signup.html",
   );
   await page.getByRole("link", { name: /Выбрать способ работы/ }).click();
   assert.equal(new URL(page.url()).hash, "#how");
