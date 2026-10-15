@@ -8,6 +8,9 @@
 - [x] Верный вход → редирект на `/`, ставится cookie `sid`. — Playwright ✓ (10.09)
 - [ ] Неверный пароль при заданном `DEMO_PASSWORD` → 401 «Wrong password». — ручной / нужен автотест
 - [x] Любой `/web/*` при 401 → бросает на `login.html`. — покрыто в app.js, проверено ранее
+- [x] Telegram mode: форма переключается, 12-символьный одноразовый код отправляется только в same-origin `/web/auth`. — Playwright
+- [x] Успешный Telegram-код обменивается Worker-to-Worker, выдаёт существующую HttpOnly-сессию с профилем и не сохраняет code/token в browser storage. — Worker auth test
+- [ ] Live E2E: код от sandbox Telegram-бота → sandbox Identity → сессия в sandbox web UI; refresh сохраняет вход, повторное использование кода отклоняется. — ручной прогон после настройки sandbox
 
 ## 2. Список сессий
 - [x] `GET /web/sessions` возвращает массив с `topic`, `status`, `lastAt`, `messageCount`. — API ✓ (10.09)
@@ -45,6 +48,7 @@
 - API: `curl` против `https://trained-assist-web.skillset-apply.workers.dev`.
 - UI: Playwright MCP, стабильные `data-testid` на всех интерактивных элементах.
 - Chaos/стор: `test/chaos-loop.mjs`, `test/chaos-multi-backend.mjs` (в ветках #8/#9).
+- Telegram → web auth: см. [общий E2E runbook](https://github.com/trained-assist/trained-assist-identity/blob/main/docs/TELEGRAM-WEB-LOGIN-E2E.md); production для этого не использовать.
 
 ## Открытые задачи (следующая приборка)
 1. `POST /web/delete/:id` + кнопка удаления в UI (чистка импортированного мусора).
