@@ -80,5 +80,45 @@ try {
     const { hub } = makeHub({ IDENTITY_API_URL: 'https://identity.example', IDENTITY_WEB_CLIENT_TOKEN: 'web-client-secret' });
     assert.equal((await auth(hub, { telegram_code: 'not-a-valid-code' })).status, 401);
   }
+  // 6. Self-service signup starts with server-side Identity exchange; PII and the
+  // Identity bearer never appear in the Telegram URL or browser response.
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://identity.example/v1/signups/start');
+    assert.equal(init.headers.authorization, 'Bearer web-client-secret');
+    assert.deepEqual(JSON.parse(init.body), { email: 'a@example.com', display_name: 'Alice Example', nickname: 'alice' });
+    return Response.json({ reference: 'a'.repeat(43), status: 'pending', expires_in_seconds: 1800 }, { status: 201 });
+  };
+  {
+    const { hub } = makeHub({ IDENTITY_API_URL: 'https://identity.example', IDENTITY_WEB_CLIENT_TOKEN: 'web-client-secret', IDENTITY_TELEGRAM_BOT_USERNAME: 'sample_assist_bot' });
+    const response = await hub.fetch(new Request('https://app.example/web/signup/start', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'a@example.com', display_name: 'Alice Example', nickname: 'alice' }),
+    }));
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), {
+      reference: 'a'.repeat(43), expires_in_seconds: 1800,
+      telegram_url: `https://t.me/sample_assist_bot?start=signup_${'a'.repeat(43)}`,
+    });
+  }
+  // 7. Confirmation polling mints the normal HttpOnly web cookie only after
+  // Telegram confirmation and binds the session to the account nickname.
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://identity.example/v1/signups/status');
+    assert.equal(init.headers.authorization, 'Bearer web-client-secret');
+    assert.deepEqual(JSON.parse(init.body), { reference: 'b'.repeat(43) });
+    return Response.json({ status: 'confirmed', user_id: 'usr_0123456789abcdef0123456789abcdef', nickname: 'alice' });
+  };
+  {
+    const { hub, map } = makeHub({ IDENTITY_API_URL: 'https://identity.example', IDENTITY_WEB_CLIENT_TOKEN: 'web-client-secret' });
+    const response = await hub.fetch(new Request('https://app.example/web/signup/status', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reference: 'b'.repeat(43) }),
+    }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { status: 'ready', ok: true });
+    assert.match(response.headers.get('set-cookie'), /HttpOnly/);
+    const token = response.headers.get('set-cookie').match(/web_token=([^;]+)/)[1];
+    assert.equal(map.get(`t:${token}`).username, 'alice');
+    assert.equal(map.get(`t:${token}`).via, 'telegram-signup');
+  }
 } finally { globalThis.fetch = realFetch; }
 console.log('worker-auth: ok');

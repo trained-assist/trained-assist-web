@@ -3,6 +3,9 @@ main = "worker.mjs"
 compatibility_date = "2024-11-06"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+IDENTITY_TELEGRAM_BOT_USERNAME = "super_personal_assistant_bot"
+
 [assets]
 directory = "./src"
 binding = "ASSETS"
