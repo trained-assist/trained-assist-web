@@ -26,15 +26,15 @@ try {
   await page.goto("https://site.test/welcome.html");
   assert.match(await page.title(), /Trained Assist/);
   assert.equal(
-    await page.getByRole("heading", { name: /Довести до результата/ }).count(),
+    await page.getByRole("heading", { name: /ИИ-агент.*для реальных задач/ }).count(),
     1,
   );
   assert.equal(await page.locator(".feature-card").count(), 3);
   assert.equal(
     await page.getByTestId("landing-login-hero").getAttribute("href"),
-    "/login.html",
+    "https://app.trainedassist.store/login.html",
   );
-  await page.getByRole("link", { name: /Посмотреть, как устроено/ }).click();
+  await page.getByRole("link", { name: /Выбрать способ работы/ }).click();
   assert.equal(new URL(page.url()).hash, "#how");
   await page.getByText("Это обычный чат с ИИ?").click();
   assert.equal(

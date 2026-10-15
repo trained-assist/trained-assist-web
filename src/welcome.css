@@ -1,13 +1,13 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap");
 
 :root {
-  --paper: #f4f5ef;
-  --ink: #19251f;
-  --muted: #69736d;
-  --line: #d9ded6;
-  --lime: #d2f27b;
-  --blue: #c7d9fb;
-  --peach: #f5d2bc;
+  --paper: #f5f5f4;
+  --ink: #242424;
+  --muted: #6f706e;
+  --line: #dededc;
+  --lime: #dededb;
+  --blue: #e4e4e2;
+  --peach: #e9e9e7;
   --mono: "DM Mono", monospace;
   --sans: "Manrope", Arial, sans-serif;
   font-family: var(--sans);
@@ -62,7 +62,7 @@ summary:focus-visible {
 }
 .brand-light {
   font-weight: 500;
-  color: #748078;
+  color: #747573;
 }
 .brand-mark {
   display: grid;
@@ -79,13 +79,13 @@ summary:focus-visible {
   display: flex;
   gap: 36px;
   margin-left: 100px;
-  color: #65716a;
+  color: #70716f;
   font-size: 12px;
   font-weight: 600;
 }
 .desktop-nav a:hover,
 .footer a:hover {
-  color: #477c42;
+  color: #4f514f;
 }
 .button {
   display: inline-flex;
@@ -114,14 +114,14 @@ summary:focus-visible {
   color: #fff;
 }
 .button-dark:hover {
-  background: #2b4437;
+  background: #3b3c3b;
 }
 .button-lime {
   background: var(--lime);
   color: var(--ink);
 }
 .button-lime:hover {
-  background: #def99a;
+  background: #e8e8e5;
 }
 .hero {
   position: relative;
@@ -154,14 +154,14 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #708077;
+  color: #777976;
 }
 .pulse {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #8db858;
-  box-shadow: 0 0 0 4px #8db85822;
+  background: #858784;
+  box-shadow: 0 0 0 4px #85878422;
 }
 .hero h1 {
   margin: 28px 0 20px;
@@ -171,12 +171,12 @@ summary:focus-visible {
   font-weight: 600;
 }
 .hero h1 span {
-  color: #718578;
+  color: #747674;
 }
 .hero-lede {
   max-width: 475px;
   margin: 0;
-  color: #63716a;
+  color: #666765;
   font-size: 15px;
   line-height: 1.8;
 }
@@ -192,19 +192,19 @@ summary:focus-visible {
 }
 .text-link span {
   margin-left: 7px;
-  color: #779348;
+  color: #777976;
 }
 .hero-note {
   display: flex;
   align-items: center;
   gap: 9px;
   margin-top: 48px;
-  color: #819087;
+  color: #7a7b79;
   font-size: 10px;
 }
 .note-icon {
   font-size: 17px;
-  color: #89a94f;
+  color: #7a7c79;
 }
 .hero-visual {
   position: relative;
@@ -215,7 +215,7 @@ summary:focus-visible {
 }
 .visual-orbit {
   position: absolute;
-  border: 1px solid #e2e6dc;
+  border: 1px solid #e3e3e1;
   border-radius: 50%;
   aspect-ratio: 1;
 }
@@ -231,7 +231,7 @@ summary:focus-visible {
   width: min(100%, 450px);
   padding: 20px 20px 13px;
   background: #fff;
-  border: 1px solid #e4e8e0;
+  border: 1px solid #e4e4e2;
   border-radius: 13px;
   box-shadow: 0 24px 70px #22342614;
 }
@@ -273,8 +273,8 @@ summary:focus-visible {
   width: 39px;
   height: 39px;
   border-radius: 11px;
-  background: #eff7dc;
-  color: #709341;
+  background: #eeeeec;
+  color: #666865;
   font-size: 19px;
 }
 .task-kicker {
@@ -301,7 +301,7 @@ summary:focus-visible {
 }
 .agent-message {
   padding: 12px 11px;
-  background: #f6f8f4;
+  background: #f5f5f3;
   border-radius: 8px;
 }
 .avatar {
@@ -315,7 +315,7 @@ summary:focus-visible {
   font-weight: 700;
 }
 .avatar-user {
-  background: #ece8df;
+  background: #eaeae8;
   color: #77746d;
 }
 .avatar-agent {
@@ -327,14 +327,14 @@ summary:focus-visible {
   align-items: center;
   gap: 6px;
   margin-top: 11px;
-  color: #698256;
+  color: #696b68;
   font: 400 8px var(--mono);
 }
 .status-dot,
 .foot-dot {
   width: 5px;
   height: 5px;
-  background: #93c56e;
+  background: #8c8e8b;
   border-radius: 50%;
 }
 .status-time {
@@ -352,13 +352,13 @@ summary:focus-visible {
   align-items: center;
   gap: 5px;
   padding: 6px 8px;
-  border: 1px solid #e7ebe4;
+  border: 1px solid #e6e6e4;
   border-radius: 5px;
   color: #738077;
   font-size: 8px;
 }
 .tool-glyph {
-  color: #87a05e;
+  color: #777976;
 }
 .tool-more {
   border-style: dashed;
@@ -407,7 +407,7 @@ summary:focus-visible {
   gap: 10px;
   padding: 12px 15px;
   background: #fff;
-  border: 1px solid #e8ece5;
+  border: 1px solid #e7e7e5;
   border-radius: 8px;
   box-shadow: 0 12px 32px #23312612;
 }
@@ -464,7 +464,7 @@ summary:focus-visible {
   color: #829087;
 }
 .section-label span {
-  color: #6d9843;
+  color: #737572;
 }
 .intro-grid {
   display: grid;
@@ -505,9 +505,9 @@ summary:focus-visible {
   overflow: hidden;
 }
 .feature-dark {
-  background: #202c25;
-  border-color: #202c25;
-  color: #f4f5ef;
+  background: #30312f;
+  border-color: #30312f;
+  color: #f5f5f4;
 }
 .feature-number {
   color: #98a49a;
@@ -524,15 +524,15 @@ summary:focus-visible {
 }
 .symbol-lime {
   background: var(--lime);
-  color: #344525;
+  color: #3e403e;
 }
 .symbol-blue {
   background: var(--blue);
-  color: #344971;
+  color: #454745;
 }
 .symbol-peach {
   background: var(--peach);
-  color: #705344;
+  color: #4c4d4b;
 }
 .feature-card h3 {
   margin: 17px 0 9px;
@@ -555,7 +555,7 @@ summary:focus-visible {
   bottom: 25px;
   width: 37px;
   height: 1px;
-  background: #8aa851;
+  background: #858784;
 }
 .how {
   display: grid;
@@ -569,7 +569,7 @@ summary:focus-visible {
   margin-top: 27px;
 }
 .steps {
-  border-top: 1px solid #dce1d9;
+  border-top: 1px solid #e0e0de;
 }
 .step {
   display: grid;
@@ -577,7 +577,7 @@ summary:focus-visible {
   gap: 18px;
   align-items: start;
   padding: 21px 0;
-  border-bottom: 1px solid #dce1d9;
+  border-bottom: 1px solid #e0e0de;
 }
 .step-index {
   padding-top: 3px;
@@ -596,7 +596,7 @@ summary:focus-visible {
   line-height: 1.8;
 }
 .step-arrow {
-  color: #8aa851;
+  color: #858784;
   font-size: 15px;
 }
 .closing {
@@ -607,7 +607,7 @@ summary:focus-visible {
   padding: 45px 50px;
   margin-bottom: 95px;
   border-radius: 12px;
-  background: #202c25;
+  background: #30312f;
   color: #fff;
 }
 .closing-mark {
@@ -617,7 +617,7 @@ summary:focus-visible {
   height: 54px;
   border-radius: 16px;
   background: var(--lime);
-  color: #263329;
+  color: #3d3f3d;
   font-size: 27px;
 }
 .closing .eyebrow {
@@ -664,7 +664,7 @@ summary:focus-visible {
   position: absolute;
   right: 3px;
   top: 16px;
-  color: #7a9855;
+  color: #777976;
   font-size: 19px;
   font-weight: 400;
 }
