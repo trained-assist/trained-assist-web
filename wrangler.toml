@@ -5,6 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 IDENTITY_TELEGRAM_BOT_USERNAME = "super_personal_assistant_bot"
+IDENTITY_API_URL = "https://trained-assist-identity.skillset-apply.workers.dev"
 
 [assets]
 directory = "./src"
