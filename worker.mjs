@@ -437,15 +437,99 @@ export class SessionHub {
     const AGENT_VERIFY = this.env.AGENT_VERIFY_URL || null;
     const AGENT_VERIFY_SECRET = this.env.AGENT_VERIFY_SECRET || null;
     const agentDelegation = !!(AGENT_VERIFY && AGENT_VERIFY_SECRET);
+    const IDENTITY_API_URL = this.env.IDENTITY_API_URL || null;
+    const IDENTITY_WEB_CLIENT_TOKEN = this.env.IDENTITY_WEB_CLIENT_TOKEN || null;
+    const identityLogin = !!(IDENTITY_API_URL && IDENTITY_WEB_CLIENT_TOKEN);
 
     if (p === '/healthz') return json(200, { ok: true, buildSha: this.env.BUILD_SHA || null });
 
     // Fail closed: a deploy with NO way to verify a password (neither a local
     // DEMO_PASSWORD nor agent delegation) is LOCKED, never open. This is a
     // powerful tool behind a public URL — better a broken login than a back door.
-    if (!PW && !agentDelegation) {
+    if (!PW && !agentDelegation && !identityLogin) {
       if (p === '/web/auth' && m === 'POST') return json(503, { error: 'Auth not configured' });
       return json(503, { error: 'Locked: server password not configured' });
+    }
+
+    if (p === '/web/signup/start' && m === 'POST') {
+      if (!identityLogin) return json(503, { error: 'Signup is not configured' }, { 'cache-control': 'no-store' });
+      const botUsername = String(this.env.IDENTITY_TELEGRAM_BOT_USERNAME || '').trim().replace(/^@/, '');
+      if (!/^[A-Za-z0-9_]{5,32}$/.test(botUsername)) return json(503, { error: 'Telegram signup is not configured' }, { 'cache-control': 'no-store' });
+      let identityOrigin;
+      try {
+        identityOrigin = new URL(IDENTITY_API_URL);
+        if (identityOrigin.protocol !== 'https:' || identityOrigin.username || identityOrigin.password) throw new Error('invalid origin');
+      } catch { return json(503, { error: 'Identity signup is not configured securely' }, { 'cache-control': 'no-store' }); }
+      const signup = await body(request);
+      let response;
+      try {
+        response = await fetch(new URL('/v1/signups/start', identityOrigin), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${IDENTITY_WEB_CLIENT_TOKEN}` },
+          body: JSON.stringify({ email: signup.email, display_name: signup.display_name, nickname: signup.nickname }),
+        });
+      } catch { return json(503, { error: 'Identity service unavailable' }, { 'cache-control': 'no-store' }); }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const safeStatus = [400, 409, 429].includes(response.status) ? response.status : 503;
+        const message = safeStatus === 400 ? 'Check your email, name, and nickname.'
+          : safeStatus === 409 ? 'Email or nickname is already in use.'
+            : safeStatus === 429 ? 'Too many attempts. Please wait and try again.' : 'Identity service unavailable.';
+        return json(safeStatus, { error: message }, { 'cache-control': 'no-store' });
+      }
+      if (typeof result.reference !== 'string' || !/^[A-Za-z0-9_-]{40,50}$/.test(result.reference)) {
+        return json(503, { error: 'Identity service returned an invalid signup reference' }, { 'cache-control': 'no-store' });
+      }
+      return json(201, {
+        reference: result.reference,
+        expires_in_seconds: result.expires_in_seconds,
+        telegram_url: `https://t.me/${botUsername}?start=${encodeURIComponent(`signup_${result.reference}`)}`,
+      }, { 'cache-control': 'no-store' });
+    }
+
+    if (p === '/web/signup/status' && m === 'POST') {
+      if (!identityLogin) return json(503, { error: 'Signup is not configured' }, { 'cache-control': 'no-store' });
+      const b = await body(request);
+      if (typeof b.reference !== 'string' || !/^[A-Za-z0-9_-]{40,50}$/.test(b.reference)) {
+        return json(400, { error: 'Invalid signup reference' }, { 'cache-control': 'no-store' });
+      }
+      let identityOrigin;
+      try {
+        identityOrigin = new URL(IDENTITY_API_URL);
+        if (identityOrigin.protocol !== 'https:' || identityOrigin.username || identityOrigin.password) throw new Error('invalid origin');
+      } catch { return json(503, { error: 'Identity signup is not configured securely' }, { 'cache-control': 'no-store' }); }
+      let response;
+      try {
+        response = await fetch(new URL('/v1/signups/status', identityOrigin), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${IDENTITY_WEB_CLIENT_TOKEN}` },
+          body: JSON.stringify({ reference: b.reference }),
+        });
+      } catch { return json(503, { error: 'Identity service unavailable' }, { 'cache-control': 'no-store' }); }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return json(response.status === 410 ? 200 : response.status === 409 ? 409 : [400, 404].includes(response.status) ? 400 : 503,
+          response.status === 410 ? { status: 'expired' }
+            : { error: response.status === 400 ? 'Signup reference expired or invalid.'
+              : response.status === 409 ? 'This signup was already completed. Please sign in.'
+                : 'Identity service unavailable.' },
+          { 'cache-control': 'no-store' });
+      }
+      if (result.status !== 'confirmed' && result.status !== 'ready') {
+        return json(200, { status: result.status }, { 'cache-control': 'no-store' });
+      }
+      if (!/^usr_[a-f0-9]{32}$/.test(result.user_id || '')
+          || !/^[A-Za-z][A-Za-z0-9_-]{2,31}$/.test(result.nickname || '')) {
+        return json(503, { error: 'Identity service returned an invalid account' }, { 'cache-control': 'no-store' });
+      }
+      const previous = this.cookieToken(request);
+      if (previous) await this.state.storage.delete(`t:${previous}`);
+      const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
+      await this.state.storage.put(`t:${token}`, {
+        at: Date.now(), username: result.nickname, userId: result.user_id, via: 'telegram-signup',
+      });
+      const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
+      return json(200, { status: 'ready', ok: true }, { 'set-cookie': cookie, 'cache-control': 'no-store' });
     }
 
     // GET only renders a page that auto-POSTs the ticket: Telegram's link-preview
@@ -488,8 +572,40 @@ export class SessionHub {
     if (p === '/web/auth' && m === 'POST') {
       const b = await body(request);
       let ok = false;
+      let identityUserId = null;
+      let identityAgentUsername = null;
+      if (typeof b.telegram_code === 'string') {
+        // Telegram link codes are redeemed only server-to-server. The web-client
+        // secret and the code never leave this Worker for the browser/session store.
+        const code = b.telegram_code.trim().toUpperCase();
+        if (!/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{12}$/.test(code) || !identityLogin) {
+          return json(401, { error: 'Invalid or expired Telegram code' });
+        }
+        try {
+          const identityOrigin = new URL(IDENTITY_API_URL);
+          if (identityOrigin.protocol !== 'https:' || identityOrigin.username || identityOrigin.password) {
+            return json(503, { error: 'Identity login is not configured securely' });
+          }
+          const r = await fetch(new URL('/v1/links/telegram/redeem', identityOrigin), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${IDENTITY_WEB_CLIENT_TOKEN}` },
+            body: JSON.stringify({ code }),
+          });
+          if (!r.ok) return json(r.status === 400 ? 401 : 503, { error: r.status === 400 ? 'Invalid or expired Telegram code' : 'Identity service unavailable' });
+          const result = await r.json();
+          if (!/^usr_[a-f0-9]{32}$/.test(result.user_id || '')
+              || !/^[A-Za-z0-9_-]{1,64}$/.test(result.agent_username || '')) {
+            return json(503, { error: 'Identity service returned an invalid login' });
+          }
+          ok = true;
+          identityUserId = result.user_id;
+          identityAgentUsername = result.agent_username;
+        } catch {
+          return json(503, { error: 'Identity service unavailable' });
+        }
+      }
       // Primary path: ask the agent to validate against its password store.
-      if (agentDelegation && b.password) {
+      if (!ok && agentDelegation && b.password) {
         const username = (b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
           ? b.username
           : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
@@ -513,11 +629,11 @@ export class SessionHub {
       // Resolve which profile logged in, so /web/sessions can pull THAT
       // profile's real Telegram sessions from the agent. Falls back to the
       // configured default profile when the form omits a username.
-      const loggedUser = (agentDelegation && b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
+      const loggedUser = identityAgentUsername || ((agentDelegation && b.username && /^[a-zA-Z0-9_-]{1,64}$/.test(b.username))
         ? b.username
-        : (this.env.AGENT_USERNAME || 'trained-assist-product-owner');
+        : (this.env.AGENT_USERNAME || 'trained-assist-product-owner'));
       const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '');
-      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: loggedUser });
+      await this.state.storage.put(`t:${token}`, { at: Date.now(), username: loggedUser, ...(identityUserId ? { userId: identityUserId, via: 'telegram-identity' } : {}) });
       const cookie = `web_token=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=2592000`;
       return json(200, { ok: true }, { 'set-cookie': cookie });
     }

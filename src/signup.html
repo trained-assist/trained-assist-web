@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f4f6">
+  <meta name="referrer" content="no-referrer">
+  <title>Создать аккаунт — Trained Assist</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    :root { --bg: #f4f4f5; --surface: #fff; --border: #e4e4e7; --text: #27272a; --text-muted: #71717a; --accent: #52525b; --accent-hover: #3f3f46; }
+    body { height: auto; min-height: 100vh; overflow: auto; }
+    .auth-page { padding: 24px 16px; }
+    .auth-card { max-width: 420px; }
+    .auth-card h1 { margin-bottom: 8px; }
+    .auth-subtitle, .privacy-note, .auth-footer { color: var(--text-muted); font-size: 13px; }
+    .auth-subtitle { text-align: center; margin-bottom: 24px; }
+    .field input { width: 100%; }
+    .privacy-note { margin: 12px 0 18px; line-height: 1.5; }
+    .auth-footer { text-align: center; margin-top: 20px; }
+    .auth-footer a { color: inherit; }
+    .auth-status { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; }
+    .auth-status a { display: inline-block; margin-top: 10px; color: var(--text); }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main class="auth-page">
+    <section class="auth-card" aria-labelledby="title">
+      <h1 id="title">Создать аккаунт</h1>
+      <p class="auth-subtitle">Укажи данные профиля и подтверди вход в Telegram.</p>
+      <form id="signup-form" data-testid="signup-form" novalidate>
+        <div class="field">
+          <label for="email">Электронная почта</label>
+          <input id="email" name="email" type="email" autocomplete="email" maxlength="254" required data-testid="signup-email">
+        </div>
+        <div class="field">
+          <label for="display-name">Имя</label>
+          <input id="display-name" name="display_name" type="text" autocomplete="name" minlength="2" maxlength="100" required data-testid="signup-name">
+        </div>
+        <div class="field">
+          <label for="nickname">Ник</label>
+          <input id="nickname" name="nickname" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" minlength="3" maxlength="32" pattern="[A-Za-z][A-Za-z0-9_-]{2,31}" required data-testid="signup-nickname" aria-describedby="nickname-help">
+          <small id="nickname-help" class="auth-subtitle" style="display:block;text-align:left;margin:4px 0 0">Латинская буква в начале; далее буквы, цифры, _ или -.</small>
+        </div>
+        <p class="privacy-note">Почта пока не подтверждается отдельно. Telegram подтвердит вход и привяжет аккаунт к этому нику.</p>
+        <button type="submit" class="btn btn-primary" data-testid="signup-submit" style="width:100%;justify-content:center">Продолжить в Telegram</button>
+        <div id="signup-error" class="err hidden" data-testid="signup-error" role="alert" aria-live="assertive"></div>
+      </form>
+      <div id="signup-wait" class="auth-status" data-testid="signup-wait" role="status" aria-live="polite" hidden>
+        <span id="signup-message">Ожидаю подтверждения в Telegram…</span>
+        <div><a id="telegram-link" href="#" target="_blank" rel="noopener noreferrer">Открыть Telegram</a></div>
+        <div><a id="signup-login-link" href="login.html" hidden>Войти в существующий аккаунт</a>
+          <button id="signup-retry" type="button" class="btn btn-ghost" hidden>Начать заново</button></div>
+      </div>
+      <p class="auth-footer">Уже есть аккаунт? <a href="login.html">Войти</a></p>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('signup-form');
+    const error = document.getElementById('signup-error');
+    const waitBox = document.getElementById('signup-wait');
+    const message = document.getElementById('signup-message');
+    const telegramLink = document.getElementById('telegram-link');
+    const loginLink = document.getElementById('signup-login-link');
+    const retryButton = document.getElementById('signup-retry');
+    const REF_KEY = 'ta.signup.reference';
+    let pollTimer = null;
+
+    function showError(text) {
+      error.textContent = text;
+      error.classList.remove('hidden');
+    }
+
+    async function checkStatus(reference) {
+      try {
+        const response = await fetch('/web/signup/status', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reference }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if (response.status === 400 || response.status === 409) {
+            clearInterval(pollTimer);
+            sessionStorage.removeItem(REF_KEY);
+            message.textContent = result.error || 'Ссылка регистрации устарела. Начни заново.';
+            if (response.status === 409) loginLink.hidden = false;
+            else retryButton.hidden = false;
+          }
+          return;
+        }
+        if (result.status === 'expired') {
+          clearInterval(pollTimer);
+          sessionStorage.removeItem(REF_KEY);
+          message.textContent = 'Ссылка истекла. Начни регистрацию заново.';
+          retryButton.hidden = false;
+          return;
+        }
+        if (result.status === 'failed') {
+          clearInterval(pollTimer);
+          sessionStorage.removeItem(REF_KEY);
+          message.textContent = 'Не удалось завершить регистрацию автоматически. Обратись в поддержку; не начинай регистрацию повторно.';
+          return;
+        }
+        if (result.status === 'ready' && result.ok) {
+          clearInterval(pollTimer);
+          sessionStorage.removeItem(REF_KEY);
+          location.replace('index.html');
+        }
+      } catch { /* keep polling through brief network interruptions */ }
+    }
+
+    retryButton.addEventListener('click', () => {
+      clearInterval(pollTimer);
+      sessionStorage.removeItem(REF_KEY);
+      waitBox.hidden = true;
+      form.hidden = false;
+      retryButton.hidden = true;
+      loginLink.hidden = true;
+    });
+
+    function resumePolling(reference) {
+      waitBox.hidden = false;
+      form.hidden = true;
+      checkStatus(reference);
+      pollTimer = setInterval(() => checkStatus(reference), 2000);
+    }
+
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      error.classList.add('hidden');
+      if (!form.reportValidity()) return;
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = 'Создаю регистрацию…';
+      try {
+        const response = await fetch('/web/signup/start', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('email').value.trim(),
+            display_name: document.getElementById('display-name').value.trim(),
+            nickname: document.getElementById('nickname').value.trim(),
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Не удалось начать регистрацию. Попробуй ещё раз.');
+        if (!/^[A-Za-z0-9_-]{40,50}$/.test(result.reference || '') || !/^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=signup_[A-Za-z0-9_-]{40,50}$/.test(result.telegram_url || '')) {
+          throw new Error('Сервис регистрации вернул некорректную ссылку.');
+        }
+        sessionStorage.setItem(REF_KEY, result.reference);
+        telegramLink.href = result.telegram_url;
+        resumePolling(result.reference);
+        location.assign(result.telegram_url);
+      } catch (err) {
+        showError(err.message || 'Ошибка соединения. Попробуй ещё раз.');
+        button.disabled = false;
+        button.textContent = 'Продолжить в Telegram';
+      }
+    });
+
+    const savedReference = sessionStorage.getItem(REF_KEY);
+    if (savedReference && /^[A-Za-z0-9_-]{40,50}$/.test(savedReference)) resumePolling(savedReference);
+  </script>
+</body>
+</html>
