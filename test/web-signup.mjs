@@ -2,13 +2,19 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+    ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+    : {}),
+});
 try {
   const page = await browser.newPage();
   const html = await readFile(new URL('../src/signup.html', import.meta.url), 'utf8');
   const css = await readFile(new URL('../src/style.css', import.meta.url), 'utf8');
   let posted;
   let telegramTarget;
+  let signupStatus = 'pending';
   await page.route('https://app.test/**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/signup.html') return route.fulfill({ contentType: 'text/html', body: html });
@@ -21,7 +27,7 @@ try {
       }) });
     }
     if (url.pathname === '/web/signup/status') {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'pending' }) });
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: signupStatus }) });
     }
     return route.fulfill({ status: 404, body: 'not found' });
   });
@@ -42,6 +48,10 @@ try {
   await page.goBack();
   await page.waitForURL('https://app.test/signup.html');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('ta.signup.reference')), 'r'.repeat(43));
+  signupStatus = 'failed';
+  await page.reload();
+  await page.getByText('Не удалось завершить регистрацию автоматически. Обратись в поддержку; не начинай регистрацию повторно.').waitFor();
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('ta.signup.reference')), null);
   console.log('PASS: signup collects email/name/nickname and redirects with only an opaque Telegram reference');
 } finally {
   await browser.close();

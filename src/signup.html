@@ -97,6 +97,12 @@
           retryButton.hidden = false;
           return;
         }
+        if (result.status === 'failed') {
+          clearInterval(pollTimer);
+          sessionStorage.removeItem(REF_KEY);
+          message.textContent = 'Не удалось завершить регистрацию автоматически. Обратись в поддержку; не начинай регистрацию повторно.';
+          return;
+        }
         if (result.status === 'ready' && result.ok) {
           clearInterval(pollTimer);
           sessionStorage.removeItem(REF_KEY);
